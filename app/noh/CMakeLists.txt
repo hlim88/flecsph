@@ -15,8 +15,7 @@ set(CMAKE_CXX_FLAGS_RELEASE
 # includes 
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
-include_directories(${CMAKE_SOURCE_DIR}/include/bodies)
-include_directories(${CMAKE_SOURCE_DIR}/include/physics/default)
+include_directories(${CMAKE_SOURCE_DIR}/include/physics/)
 include_directories(${CMAKE_SOURCE_DIR}/app/noh/include)
 include_directories(${CMAKE_SOURCE_DIR}/mpisph)
 include_directories(${CMAKE_SOURCE_DIR}/third-party-libraries/ScalingFramework/IOTests)
@@ -44,3 +43,28 @@ target_link_libraries(noh ${FleCSPH_LIBRARIES})
 
 add_definitions(-DFLECSI_ENABLE_SPECIALIZATION_TLT_INIT)
 add_definitions(-DFLECSI_OVERRIDE_DEFAULT_SPECIALIZATION_DRIVER)
+
+#------------------------------------------------------------------------------#
+# noh test, call the default parameter file 
+#------------------------------------------------------------------------------#
+
+cinch_add_unit(noh_test
+  SOURCES
+    test/noh.cc
+    ${CMAKE_SOURCE_DIR}/app/noh/main_driver.cc
+    ${FleCSI_RUNTIME}/runtime_driver.cc 
+  INPUTS
+    ${PROJECT_SOURCE_DIR}/data/noh_sqn100.par 
+  LIBRARIES 
+    ${FleCSPH_LIBRARIES}
+)
+
+if(ENABLE_UNIT_TESTS)
+# run the generator with default file 
+add_custom_target(
+    noh_generator_test 
+    COMMAND noh_generator ${PROJECT_SOURCE_DIR}/data/noh_sqn100.par
+    COMMAND mv noh_sqn100.h5part ../../test/noh
+)
+add_dependencies(noh_test noh_generator_test)
+endif()

@@ -19,6 +19,7 @@
 include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${CMAKE_SOURCE_DIR}/include/bodies/)
 include_directories(${CMAKE_SOURCE_DIR}/include/physics/default/)
+include_directories(${CMAKE_SOURCE_DIR}/include/physics/)
 include_directories(${CMAKE_SOURCE_DIR}/mpisph/test)
 include_directories(${CMAKE_SOURCE_DIR}/mpisph/)
 
@@ -41,7 +42,6 @@ cinch_add_unit(mpi_qsort
     ${FleCSI_RUNTIME}/runtime_driver.cc  
   LIBRARIES ${FleCSPH_LIBRARIES}
   POLICY MPI 
-  THREADS 4 
 )
 
 cinch_add_unit(gravitation
@@ -50,7 +50,6 @@ cinch_add_unit(gravitation
     ${FleCSI_RUNTIME}/runtime_driver.cc  
   LIBRARIES ${FleCSPH_LIBRARIES}
   POLICY MPI 
-  THREADS 4 
 )
 
 cinch_add_unit(io
@@ -61,7 +60,6 @@ cinch_add_unit(io
     test/io_test.h5part
   LIBRARIES ${FleCSPH_LIBRARIES}
   POLICY MPI 
-  THREADS 1
 )
 
 cinch_add_unit(body_system
@@ -72,7 +70,6 @@ cinch_add_unit(body_system
     test/io_test.h5part
   LIBRARIES ${FleCSPH_LIBRARIES}
   POLICY MPI 
-  THREADS 1
 )
 
 #~---------------------------------------------------------------------------~-#

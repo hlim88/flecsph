@@ -42,11 +42,12 @@ RUN  cmake ..
 USER root
 RUN rm -rf /usr/local/include/legion* /usr/local/include/realm*
 RUN make VERBOSE=1 -j2
+RUN ls /usr/local/lib/
 USER flecsi
 
 #build flecsi
 WORKDIR /home/flecsi
-RUN git clone -b FleCSPH --depth 1 --recursive https://github.com/laristra/flecsi flecsi 
+RUN git clone -b stable/flecsph-compatible --depth 1 --recursive https://github.com/laristra/flecsi flecsi 
 RUN  cd flecsi && mkdir build && cd build
 WORKDIR flecsi/build
 RUN  cmake .. -DFLECSI_RUNTIME_MODEL=legion \
@@ -70,9 +71,9 @@ WORKDIR ${H5Hut}
 RUN sed -i 's/H5Pset_fapl_mpiposix (fapl_id, comm, use_gpfs)/H5Pset_fapl_mpio (fapl_id, comm, \&use_gpfs)/g' src/h5core/h5_hdf5_private.h
 RUN autoreconf -i -f
 #ubuntu needs CC=h5pcc amd HDF5_USE_SHLIB=yes is needed for shared lib
-RUN ./configure --disable-static --enable-shared --enable-parallel --prefix=/usr/local CC=h5pcc && HDF5_USE_SHLIB=yes make
+RUN ./configure --disable-static --enable-shared --enable-parallel --prefix=/usr/local CC=h5pcc && HDF5_USE_SHLIB=yes make --quiet
 USER root
-RUN make install
+RUN make install --quiet
 USER flecsi
 RUN ldd /usr/local/lib/libH5hut.so
 
@@ -92,13 +93,8 @@ RUN cmake -DENABLE_MPI=$MPI \
 RUN HDF5_USE_SHLIB=yes ${SONARQUBE:+build-wrapper-linux-x86-64 --out-dir bw-output} make VERBOSE=1 -j2
 RUN ccache -s
 RUN make doxygen
-RUN if [ ${COVERAGE} ]; then \
-      python -m coverxygen --xml-dir doc/doxygen/xml/ --src-dir .. --output doxygen.coverage.info; \
-      wget -O codecov.sh https://codecov.io/bash; \
-      bash codecov.sh -X gcov -f doxygen.coverage.info -F documentation; \
-#      doxy-coverage --threshold 64 doc/doxygen/xml/; \
-    fi
 RUN make install DESTDIR=${PWD}/install && rm -rf ${PWD}/install
+RUN export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib/
 RUN make test ARGS="-V" || true
 RUN cd .. && if [ ${COVERAGE} ]; then \
   if [ ${CC} = clang ]; then \

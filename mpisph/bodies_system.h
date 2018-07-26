@@ -15,13 +15,13 @@
 
 #include "tree_colorer.h"
 #include "tree_fmm.h"
-#include "physics.h"
 #include "io.h"
 #include "utils.h"
 
 #include <omp.h>
 #include <iostream>
 #include <fstream>
+#include <typeinfo>
 
 using namespace mpi_utils;
 
@@ -48,15 +48,10 @@ public:
   body_system():totalnbodies_(0L),localnbodies_(0L),macangle_(0.0),
   maxmasscell_(1.0e-40),tree_(nullptr)
   {
-    int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD,&rank); 
     // Display the number of threads in DEBUG mode
-    if(rank==0)
-    {
-      #pragma omp parallel 
-      #pragma omp single 
-      std::cout<<"OMP: "<<omp_get_num_threads()<<std::endl;
-    }
+    #pragma omp parallel 
+    #pragma omp single 
+    clog_one(warn)<<"USING OMP THREADS: "<<omp_get_num_threads()<<std::endl;
   };
 
   /**
@@ -137,7 +132,7 @@ public:
   void 
   read_bodies(
       const char * filename,
-      int startiteration)
+      const int startiteration)
   {
 
     io::inputDataHDF5(localbodies_,filename,totalnbodies_,localnbodies_,
@@ -200,13 +195,7 @@ public:
     MPI_Allreduce(MPI_IN_PLACE,&smoothinglength_,1,MPI_DOUBLE,MPI_MAX,
         MPI_COMM_WORLD);
 
-    #ifdef DEBUG
-    #ifdef OUTPUT
-    if(rank==0){
-      std::cout<<"H="<<smoothinglength_<<std::endl;
-    }
-    #endif
-    #endif 
+    clog_one(trace)<<"H="<<smoothinglength_<<std::endl;
 
     return smoothinglength_;
 
@@ -234,13 +223,8 @@ public:
     MPI_Allreduce(MPI_IN_PLACE,&smoothinglength_,1,MPI_DOUBLE,MPI_MAX,
         MPI_COMM_WORLD);
 
-    #ifdef DEBUG
-    #ifdef OUTPUT
-    if(rank==0){
-      std::cout<<"H="<<smoothinglength_<<std::endl;
-    }
-    #endif
-    #endif
+    clog_one(trace)<<"H="<<smoothinglength_<<std::endl;
+
     tcolorer_.mpi_compute_range(localbodies_,range_,smoothinglength_);
     return range_;
   }
@@ -263,6 +247,7 @@ public:
     int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD,&rank);
     MPI_Comm_size(MPI_COMM_WORLD,&size);
+    std::ostringstream oss;
 
     // Destroy the previous tree
     if(tree_ !=  nullptr){
@@ -272,9 +257,7 @@ public:
     // Choose the smoothing length to be the biggest from everyone 
     smoothinglength_ = getSmoothinglength();
 
-    if(rank==0){
-      std::cout<<"H="<<smoothinglength_<<std::endl;
-    }
+    clog_one(trace)<<"H="<<smoothinglength_<<std::endl;
 
     // Then compute the range of the system 
     tcolorer_.mpi_compute_range(localbodies_,range_,smoothinglength_);
@@ -310,7 +293,7 @@ public:
     MPI_SUM,MPI_COMM_WORLD); 
     assert(checknparticles==totalnbodies_);
 
-    tree_->update_branches(2*smoothinglength_); 
+    tree_->update_branches(smoothinglength_); 
 
 #ifdef DEBUG
     std::vector<int> nentities(size);
@@ -327,13 +310,12 @@ public:
       MPI_COMM_WORLD
       );
 
-    if(rank == 0){
-      std::cout<<rank<<" sub_entities before="; 
-      for(auto v: nentities){
-        std::cout<<v<<";";
-      }
-      std::cout<<std::endl;
+    oss << rank << " sub_entities before="; 
+    for(auto v: nentities){
+      oss << v << ";";
     }
+    oss << std::endl;
+    clog_one(trace) << oss.str() << std::flush;
 #endif
 
     // Exchnage usefull body_holder from my tree to other processes
@@ -341,7 +323,7 @@ public:
         range_,smoothinglength_);
 
     // Update the tree 
-    tree_->update_branches(2*smoothinglength_);
+    tree_->update_branches(smoothinglength_);
 
 #ifdef DEBUG
     lentities = tree_->root()->sub_entities();
@@ -357,13 +339,12 @@ public:
       MPI_COMM_WORLD
       );
 
-    if(rank == 0){
-      std::cout<<rank<<" sub_entities after="; 
-      for(auto v: nentities){
-        std::cout<<v<<";";
-      }
-      std::cout<<std::endl;
+    oss << rank << " sub_entities after="; 
+    for(auto v: nentities){
+      oss << v << ";";
     }
+    oss << std::endl;
+    clog_one(trace) << oss.str() << std::flush;
 #endif
     
     tcolorer_.mpi_compute_ghosts(*tree_,bodies_,smoothinglength_/*,range_*/);
@@ -392,9 +373,7 @@ public:
     MPI_Comm_size(MPI_COMM_WORLD,&size);
     MPI_Comm_rank(MPI_COMM_WORLD,&rank);
 
-    if(rank == 0){
-      std::cout<<"FMM: mmass="<<maxmasscell_<<" angle="<<macangle_<<std::endl;
-    }
+    clog_one(trace)<<"FMM: mmass="<<maxmasscell_<<" angle="<<macangle_<<std::endl;
 
     // Just consider the local particles in the tree for FMM 
     tree_->update_branches_local(smoothinglength_);
@@ -405,7 +384,7 @@ public:
     tfmm_.mpi_gather_cells(*tree_,macangle_,totalnbodies_);
     
     // Reset the tree to normal before leaving
-    tree_->update_branches(2*smoothinglength_);
+    tree_->update_branches(smoothinglength_);
   }
 
   /**
@@ -433,7 +412,7 @@ public:
     int64_t ncritical = 32; 
     tree_->apply_sub_cells(
         tree_->root(),
-        bodies_[0]->getBody()->getSmoothinglength()*2.,
+        smoothinglength_,
         0.,
         ncritical,
         ef,
@@ -482,6 +461,31 @@ public:
     ARGS&&... args)
   {
     ef(bodies_,std::forward<ARGS>(args)...);
+  }
+
+
+  /**
+   * @brief      Test function using the n^2 algorithm testing 
+   *
+   * @param[in]  <unnamed>  The function to apply
+   * @param[in]  <unnamed>  The arguments of the function   
+   *
+   * @tparam     EF         The function to apply
+   * @tparam     ARGS       The arguments of the function   
+   */
+  template<
+    typename EF,
+    typename... ARGS
+  >
+  void apply_square(
+    EF&& ef, 
+    ARGS&&... args)
+  {
+    int64_t nelem = bodies_.size();
+    #pragma omp parallel for 
+    for(int64_t i = 0 ; i < nelem; ++i){
+      ef(bodies_[i],bodies_,std::forward<ARGS>(args)...);
+    }
   }
 
   /**

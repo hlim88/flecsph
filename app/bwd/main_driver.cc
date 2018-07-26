@@ -37,10 +37,11 @@
 #include "flecsi/data/data_client.h"
 #include "flecsi/data/data.h"
 
+#include "params.h"
 #include <bodies_system.h>
 
-#include "eos_analytics.h"
-#include "physics.h"
+#include "default_physics.h"
+#include "analysis.h"
 
 namespace flecsi{
 namespace execution{
@@ -53,43 +54,34 @@ mpi_init_task(int startiteration){
   int size;
   MPI_Comm_size(MPI_COMM_WORLD,&size);
   MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+  clog_set_output_rank(0);
   
   int totaliters = 100;
   int iteroutput = 1;
   double totaltime = 0.0;
   double maxtime = 10.0;
-  int iter = startiteration; 
 
   // Init if default values are not ok
   physics::dt = 1.0e-10;
-  physics::alpha = 1; 
-  physics::beta = 2; 
-  physics::stop_boundaries = true;
+  ///physics::alpha = 1; // converted to a parameter: sph_viscosity_alpha
+  ///physics::beta = 2;  // converted to sph_viscosity_beta
+  ///physics::stop_boundaries = true; // converted to a parameter
   physics::min_boundary = {0.1};
   physics::max_boundary = {1.0};
-  physics::gamma = 5./3.;
+  ///physics::gamma = 5./3.; // converted to a parameter (poly_gamma)
+  ///physics::epsilon = 0.01; // converted to sph_viscosity_epsilon
 
   body_system<double,gdimension> bs;
-  bs.read_bodies("dwd_id.h5part",startiteration);
-  //io::inputDataHDF5(rbodies,"hdf5_sodtube.h5part",totalnbodies,nbodies);
-
-  //eos_analytics eos(1.4);
-
-  double h = bs.getSmoothinglength();
-  physics::epsilon = 0.01*h*h;
+  bs.read_bodies("bwd_id.h5part",startiteration);
 
 #ifdef OUTPUT
-  bs.write_bodies("output_dwd",iter);
-  //io::outputDataHDF5(rbodies,"output_sodtube.h5part",0);
-  //tcolorer.mpi_output_txt(rbodies,iter,"output_sodtube"); 
+  bs.write_bodies("output_bwd",physics::iteration);
 #endif
 
-  ++iter; 
+  ++physics::iteration; 
   do
   { 
-    MPI_Barrier(MPI_COMM_WORLD);
-    if(rank==0)
-      std::cout<<std::endl<<"#### Iteration "<<iter<<std::endl;
+    analysis::screen_output();
     MPI_Barrier(MPI_COMM_WORLD);
 
     // Compute and prepare the tree for this iteration 
@@ -103,74 +95,56 @@ mpi_init_task(int startiteration){
     bs.update_iteration();
    
     // Do the DWD physics
-    if(rank==0)
-      std::cout<<"Density"<<std::flush; 
+    clog_one(trace)<<"Density"<<std::flush; 
     bs.apply_in_smoothinglength(physics::compute_density);
-    if(rank==0)
-      std::cout<<".done"<<std::endl;
+    clog_one(trace)<<".done"<<std::endl;
 
-    if(rank==0)
-      std::cout<<"Pressure"<<std::flush; 
+    clog_one(trace)<<"Pressure"<<std::flush; 
     bs.apply_all(physics::compute_pressure_wd);
-    if(rank==0)
-      std::cout<<".done"<<std::endl;
+    clog_one(trace)<<".done"<<std::endl;
 
-    if(rank==0)
-      std::cout<<"Linear Momentum"<<std::flush; 
+    clog_one(trace)<<"Linear Momentum"<<std::flush; 
     //bs.apply_all(physics::compute_lin_momentum);
-    if(rank==0)
-      std::cout<<".done"<<std::endl;
+    clog_one(trace)<<".done"<<std::endl;
 
-    if(rank==0)
-      std::cout<<"Soundspeed"<<std::flush; 
+    clog_one(trace)<<"Soundspeed"<<std::flush; 
     bs.apply_all(physics::compute_soundspeed);
-    if(rank==0)
-      std::cout<<".done"<<std::endl;
+    clog_one(trace)<<".done"<<std::endl;
     
     // Refresh the neighbors within the smoothing length 
     bs.update_neighbors(); 
 
-    if(rank==0)
-      std::cout<<"Hydro acceleration"<<std::flush; 
+    clog_one(trace)<<"Hydro acceleration"<<std::flush; 
     bs.apply_in_smoothinglength(physics::compute_hydro_acceleration);
-    if(rank==0)
-      std::cout<<".done"<<std::endl;
+    clog_one(trace)<<".done"<<std::endl;
  
-    if(rank==0)
-      std::cout<<"Internalenergy"<<std::flush; 
-    bs.apply_in_smoothinglength(physics::compute_internalenergy);
-    if(rank==0)
-      std::cout<<".done"<<std::endl; 
+    clog_one(trace)<<"Internalenergy"<<std::flush; 
+    bs.apply_in_smoothinglength(physics::compute_dudt);
+    clog_one(trace)<<".done"<<std::endl; 
    
-    if(iter==1){ 
-      if(rank==0)
-        std::cout<<"leapfrog"<<std::flush; 
+    if(physics::iteration==1){ 
+      clog_one(trace)<<"leapfrog"<<std::flush; 
       bs.apply_all(physics::leapfrog_integration_first_step);
-      if(rank==0)
-        std::cout<<".done"<<std::endl;
+      clog_one(trace)<<".done"<<std::endl;
     }else{
-      if(rank==0)
-        std::cout<<"leapfrog"<<std::flush; 
+      clog_one(trace)<<"leapfrog"<<std::flush; 
       bs.apply_all(physics::leapfrog_integration);
-      if(rank==0)
-        std::cout<<".done"<<std::endl;
+      clog_one(trace)<<".done"<<std::endl;
     }
 
-    if(rank==0)
-      std::cout<<"dudt integration"<<std::flush; 
+    clog_one(trace)<<"dudt integration"<<std::flush; 
     bs.apply_all(physics::dudt_integration);
-    if(rank==0)
-      std::cout<<".done"<<std::endl;
+    clog_one(trace)<<".done"<<std::endl;
 
    
 #ifdef OUTPUT
-    if(iter % iteroutput == 0){ 
-      bs.write_bodies("output_dwd",iter/iteroutput);
+    if(physics::iteration % iteroutput == 0){ 
+      bs.write_bodies("output_bwd",physics::iteration/iteroutput);
     }
 #endif
-    ++iter;
+    ++physics::iteration;
     
-  }while(iter<totaliters);
+  }while(physics::iteration<totaliters);
 }
 
 flecsi_register_mpi_task(mpi_init_task);
@@ -184,16 +158,14 @@ specialization_tlt_init(int argc, char * argv[]){
     startiteration = atoi(argv[1]);
   }
 
-  std::cout << "In user specialization_driver" << std::endl;
-  /*const char * filename = argv[1];*/
-  /*std::string  filename(argv[1]);
-  std::cout<<filename<<std::endl;*/
+  clog_one(warn) << "In user specialization_driver" << std::endl;
+
   flecsi_execute_mpi_task(mpi_init_task,startiteration); 
 } // specialization driver
 
 void 
 driver(int argc,  char * argv[]){
-  std::cout << "In user driver" << std::endl;
+  clog_one(warn) << "In user driver" << std::endl;
 } // driver
 
 
