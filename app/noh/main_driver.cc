@@ -51,6 +51,9 @@ static std::string output_h5data_file; // = output_h5data_prefix + ".h5part"
 void set_derived_params() {
   using namespace param;
 
+  // set kernel
+  physics::select_kernel(sph_kernel);
+
   // filenames (this will change for multiple files output)
   std::ostringstream oss;
   oss << initial_data_prefix << ".h5part";
@@ -138,13 +141,17 @@ mpi_init_task(const char * parameter_file){
     bs.apply_all(physics::dudt_integration);
     clog_one(trace) << ".done" << std::endl;
 
+
 #ifdef OUTPUT_ANALYSIS
     // Compute the analysis values based on physics
     bs.get_all(analysis::compute_lin_momentum);
     bs.get_all(analysis::compute_total_mass);
+    bs.get_all(analysis::compute_total_energy);
+    bs.get_all(analysis::compute_total_ang_mom);
     // Only add the header in the first iteration
     analysis::scalar_output("scalar_reductions.dat");
 #endif
+
 
 #ifdef OUTPUT
     if(out_h5data_every > 0 && physics::iteration % out_h5data_every == 0){

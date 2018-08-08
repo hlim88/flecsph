@@ -6,10 +6,10 @@
 #include <iostream>
 #include <algorithm>
 #include <cassert>
+#include <math.h>
 
 #include "params.h"
 #include "hdf5ParticleIO.h"
-#include "kernels.h"
 #include "user.h"
 
 /*
@@ -374,7 +374,9 @@ int main(int argc, char * argv[]){
     u[part] = uint_initial;
     h[part] = sph_smoothing_length;
     id[part] = posid++;
+  }
 
+  for(int64_t part=0; part<tparticles; ++part){
     if(sqrt((x[part]-x_c)*(x[part]-x_c)+(y[part]-y_c)*(y[part]-y_c)+(z[part]-z_c)*(z[part]-z_c)) < r_blast){
        u[part] = u[part]+sedov_blast_energy/particles_blast;
        P[part] = u[part]*rho[part]*(poly_gamma - 1.0);
