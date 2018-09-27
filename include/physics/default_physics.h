@@ -29,10 +29,11 @@
 #include <vector>
 
 #include "params.h"
+#include "eos.h"
 #include "utils.h"
 #include "kernels.h"
 #include "tree.h"
-#include <boost/algorithm/string.hpp>
+#include "eforce.h"
 
 namespace physics{
   using namespace param;
@@ -53,42 +54,6 @@ namespace physics{
   int64_t iteration = 0;
 
   /**
-   * @brief      Kernel selector: types, global variables and the function
-   *
-   * @param      kstr     Kernel string descriptor
-   *
-   * @return     Pointer to the kernel
-   */
-  typedef double  (*kernel_function_t)(const double,    const double);
-  typedef point_t (*kernel_gradient_t)(const point_t &, const double);
-  kernel_function_t kernel;
-  kernel_gradient_t gradKernel;
-
-  void
-  select_kernel(const std::string& kstr) {
-    if (boost::iequals(kstr,"cubic spline")) {
-      kernel = kernels::cubic_spline;
-      gradKernel = kernels::gradient_cubic_spline;
-    }
-    else if (boost::iequals(kstr, "quintic spline")) {
-      kernel = kernels::quintic_spline;
-      gradKernel = kernels::gradient_quintic_spline;
-    }
-    else if (boost::iequals(kstr, "gaussian")) {
-      kernel = kernels::gaussian;
-      gradKernel = kernels::gradient_gaussian;
-    }
-    else if (boost::iequals(kstr, "wendland quintic")) {
-      kernel = kernels::wendland_quintic;
-      gradKernel = kernels::gradient_wendland_quintic;
-    }
-    else {
-      clog_one(fatal) << "Bad kernel parameter" << std::endl;
-    }
-  }
-
-
-  /**
    * @brief      Compute the density 
    * Based on Fryer/05 eq(10)
    * @param      srch  The source's body holder
@@ -106,7 +71,7 @@ namespace physics{
       body* nb = nbh->getBody();
       double dist = flecsi::distance(source->getPosition(),nb->getPosition());
       mpi_assert(dist>=0.0);
-      double kernelresult = kernel(dist,
+      double kernelresult = kernels::kernel(dist,
             .5*(source->getSmoothinglength()+nb->getSmoothinglength()));
       density += kernelresult*nb->getMass();
     } // for
@@ -114,77 +79,52 @@ namespace physics{
     source->setDensity(density);
   } // compute_density
 
+
   /**
-   * @brief      Compute the pressure
-   * Ideal gas EOS
+   * @brief      Calculates total energy for every particle
    * @param      srch  The source's body holder
    */
-  void 
-  compute_pressure(
-      body_holder* srch)
-  { 
-    using namespace param;
+  void set_total_energy (body_holder* srch) { 
     body* source = srch->getBody();
-    double pressure = (poly_gamma-1.0)*
-      source->getDensity()*source->getInternalenergy();
-    source->setPressure(pressure);
-  } // compute_pressure
+    const point_t pos = source->getPosition(),
+                  vel = source->getVelocity();
+    const double eint = source->getInternalenergy(),
+                 epot = external_force::potential(srch);
+    double ekin = vel[0]*vel[0];
+    for (unsigned short i=1; i<gdimension; ++i)
+      ekin += vel[i]*vel[i];
+    ekin *= .5;
+    source->setTotalenergy(eint + epot + ekin);
+  } // set_total_energy
 
-#ifdef ADIABATIC
+
   /**
-   * @brief      Compute the pressure based on adiabatic index
-   *
+   * @brief      Subtracts mechanical energy from total energy 
+   *             to recover internal energy
    * @param      srch  The source's body holder
    */
-  void 
-  compute_pressure_adiabatic(
-      body_holder* srch)
-  { 
-    using namespace param;
+  void recover_internal_energy (body_holder* srch) { 
     body* source = srch->getBody();
-    double pressure = source->getAdiabatic()*
-      pow(source->getDensity(),poly_gamma);
-    source->setPressure(pressure);
-  } // compute_pressure
-#endif 
+    const point_t pos = source->getPosition(),
+                  vel = source->getVelocity();
+    const double etot = source->getTotalenergy(),
+                 epot = external_force::potential(srch);
+    double ekin = vel[0]*vel[0];
+    for (unsigned short i=1; i<gdimension; ++i)
+      ekin += vel[i]*vel[i];
+    ekin *= .5;
+    const double eint = etot - ekin - epot;
+    if (eint < 0.0) {
+      std::cerr << "ERROR: internal energy is negative!" << std::endl
+                << "particle id: " << source->getId()    << std::endl
+                << "total energy: " << etot              << std::endl
+                << "kinetic energy: " << ekin            << std::endl
+                << "particle position: " << pos          << std::endl;
+      mpi_assert(false);
+    }
+    source->setInternalenergy(eint);
+  } // recover_internal_energy
 
-  /**
-   * @brief      \TODO NEED COMMENTS
-   *
-   * @param      srch  The srch
-   */
-  void 
-  compute_pressure_wd(
-      body_holder* srch)
-  { 
-    body* source = srch->getBody();
-    double A_dwd = 6.00288e22;
-    double B_dwd = 9.81011e5;
-
-    double x_dwd = pow((source->getDensity())/B_dwd,1.0/3.0);
-    double pressure = A_dwd*(x_dwd*(2.0*x_dwd*x_dwd-3.0)*
- 		      pow(x_dwd*x_dwd+1.0,1.0/2.0)+3.0*asinh(x_dwd));
-    source->setPressure(pressure);
-  } // compute_pressure_wd
-
-
-
-  /**
-   * @brief      Compute the sound speed
-   * From CES-Seminar 13/14 - Smoothed Particle Hydrodynamics 
-   * 
-   * @param      srch  The source's body holder
-   */
-  void 
-  compute_soundspeed(
-      body_holder* srch)
-  {
-    using namespace param;
-    body* source = srch->getBody();
-    double soundspeed = sqrt(poly_gamma*source->getPressure()
-                                       /source->getDensity());
-    source->setSoundspeed(soundspeed);
-  } // computeSoundspeed
 
   /**
    * @brief      Compute the density, EOS and spundspeed in the same function 
@@ -199,21 +139,12 @@ namespace physics{
     std::vector<body_holder*>& nbsh)
   {
     compute_density(srch,nbsh);
-    compute_pressure(srch);
-    compute_soundspeed(srch); 
+    if (thermokinetic_formulation)
+      recover_internal_energy(srch);
+    eos::compute_pressure(srch);
+    eos::compute_soundspeed(srch); 
   }
 
-#ifdef ADIABATIC
-  void 
-  compute_density_pressure_adiabatic_soundspeed(
-    body_holder* srch, 
-    std::vector<body_holder*>& nbsh)
-  {
-    compute_density(srch,nbsh);
-    compute_pressure_adiabatic(srch);
-    compute_soundspeed(srch); 
-  }
-#endif
 
   /**
    * @brief      mu_ij for the artificial viscosity 
@@ -236,7 +167,7 @@ namespace physics{
     double result = 0.0;
     double h_ij = .5*(source->getSmoothinglength()+nb->getSmoothinglength()); 
     space_vector_t vecVelocity = flecsi::point_to_vector(
-        source->getVelocity() - nb->getVelocity());
+        source->getVelocityhalf() - nb->getVelocityhalf());
     space_vector_t vecPosition = flecsi::point_to_vector(
         source->getPosition() - nb->getPosition());
     double dotproduct = flecsi::dot(vecVelocity,vecPosition);
@@ -250,8 +181,9 @@ namespace physics{
     return result; 
   } // mu
 
+
   /**
-   * @brief      Artificial viscosity 
+   * @brief      Artificial viscosity term, Pi_ab
    * From Rosswog'09 (arXiv:0903.5075) - 
    * Astrophysical Smoothed Particle Hydrodynamics, eq.(59) 
    *
@@ -276,6 +208,7 @@ namespace physics{
     return res;
   }
 
+
   /**
    * @brief      Calculates the hydro acceleration
    * From CES-Seminar 13/14 - Smoothed Particle Hydrodynamics 
@@ -292,51 +225,50 @@ namespace physics{
 
     // Reset the accelerastion 
     // \TODO add a function to reset in main_driver
-    point_t acceleration = point_t{};
+    point_t acceleration = {};
 
     point_t hydro = {};
     for(auto nbh : ngbsh){ 
       body* nb = nbh->getBody();
 
-      if(nb->getPosition() == source->getPosition()){
+      if(nb->getPosition() == source->getPosition())
         continue;
-      }
 
       // Compute viscosity
       double visc = viscosity(source,nb);
       
       // Hydro force
-      point_t vecPosition = source->getPosition()-nb->getPosition();
-      double pressureDensity = source->getPressure()/(source->getDensity()*
-          source->getDensity())
-          + nb->getPressure()/(nb->getDensity()*nb->getDensity());
+      point_t vecPosition = source->getPosition() - nb->getPosition();
+      double rho_a = source->getDensity();
+      double rho_b = nb->getDensity();
+      double pressureDensity 
+          = source->getPressure()/(rho_a*rho_a) 
+          + nb->getPressure()/(rho_b*rho_b);
 
       // Kernel computation
-      point_t sourcekernelgradient = gradKernel(
+      point_t sourcekernelgradient = kernels::gradKernel(
           vecPosition,source->getSmoothinglength());
       point_t resultkernelgradient = sourcekernelgradient;
 
-      hydro += nb->getMass()*(pressureDensity+visc)
+      hydro += nb->getMass()*(pressureDensity + visc)
         *resultkernelgradient;
 
     }
     hydro = -1.0*hydro;
     acceleration += hydro;
+    acceleration += external_force::acceleration(srch);
     source->setAcceleration(acceleration);
   } // compute_hydro_acceleration
 
+
   /**
-   * @brief      Calculates the dudt, variation of internal energy.
+   * @brief      Calculates the dudt, time derivative of internal energy.
    * From CES-Seminar 13/14 - Smoothed Particle Hydrodynamics 
    *
    * @param      srch  The source's body holder
    * @param      nbsh  The neighbors' body holders
    */
-  void
-  compute_dudt(
-    body_holder* srch,
-    std::vector<body_holder*>& ngbsh)
-  {
+  void compute_dudt(body_holder* srch, std::vector<body_holder*>& ngbsh) {
     body* source = srch->getBody();
 
     double dudt = 0;
@@ -355,14 +287,14 @@ namespace physics{
     
       // Compute the gradKernel ij      
       point_t vecPosition = source->getPosition()-nb->getPosition();
-      point_t sourcekernelgradient = gradKernel(
+      point_t sourcekernelgradient = kernels::gradKernel(
           vecPosition,source->getSmoothinglength());
       space_vector_t resultkernelgradient = 
           flecsi::point_to_vector(sourcekernelgradient);
 
       // Velocity vector 
       space_vector_t vecVelocity = flecsi::point_to_vector(
-          source->getVelocity()-nb->getVelocity());
+          source->getVelocity() - nb->getVelocity());
 
       dudt_pressure += nb->getMass()*
         flecsi::dot(vecVelocity,resultkernelgradient);
@@ -370,15 +302,68 @@ namespace physics{
         flecsi::dot(vecVelocity,resultkernelgradient);
     }
     
-    dudt = source->getPressure()/(source->getDensity()*source->getDensity())*
-    dudt_pressure+.5*dudt_visc;
+    double P_a = source->getPressure();
+    double rho_a = source->getDensity();
+    dudt = P_a/(rho_a*rho_a)*dudt_pressure + .5*dudt_visc;
 
     source->setDudt(dudt);
   } // compute_dudt
 
 
+  /**
+   * @brief      Calculates the dedt, time derivative of either 
+   *             thermokinetic (internal + kinetic) or total 
+   *             (internal + kinetic + potential) energy.
+   * See e.g. Rosswog (2009) "Astrophysical SPH" eq. (34) 
+   *
+   * @param      srch  The source's body holder
+   * @param      nbsh  The neighbors' body holders
+   */
+  void compute_dedt(body_holder* srch, std::vector<body_holder*>& ngbsh) {
+    body* source = srch->getBody();
 
-#ifdef ADIABATIC
+    double dedt = 0;
+
+    const point_t pos_a = source->getPosition(),
+                  vel_a = source->getVelocity();
+    const double h_a = source->getSmoothinglength(),
+                 P_a = source->getPressure(),
+                 rho_a = source->getDensity();
+    const double Prho2_a = P_a/(rho_a*rho_a);
+
+    for(auto nbh: ngbsh){
+      body* nb = nbh->getBody();
+      const point_t pos_b = nb->getPosition();
+      if(pos_a == pos_b)
+        continue;
+
+      // Compute the \nabla_a W_ab      
+      const point_t Da_Wab = kernels::gradKernel(pos_a - pos_b, h_a),
+                    vel_b = nb->getVelocity();
+    
+      // va*DaWab and vb*DaWab
+      double va_dot_DaWab = vel_a[0]*Da_Wab[0];
+      double vb_dot_DaWab = vel_b[0]*Da_Wab[0];
+      for (unsigned short i=1; i<gdimension; ++i) {
+        va_dot_DaWab += vel_a[i]*Da_Wab[i],
+        vb_dot_DaWab += vel_b[i]*Da_Wab[i];
+      }
+
+      const double m_b = nb->getMass(),
+                   P_b = nb->getPressure(),
+                   rho_b = nb->getDensity();
+      const double Prho2_b = P_b/(rho_b*rho_b),
+                   Pi_ab = viscosity(source,nb);
+
+      // add this neighbour's contribution
+      dedt -= m_b*( Prho2_a*vb_dot_DaWab + Prho2_b*va_dot_DaWab 
+                + .5*Pi_ab*(va_dot_DaWab + vb_dot_DaWab));
+    }
+    
+    source->setDudt(dedt);
+  } // compute_dedt
+
+
   /**
    * @brief      Compute the adiabatic index for the particles 
    *
@@ -413,7 +398,7 @@ namespace physics{
       mpi_assert(viscosity>=0.0);
 
       point_t vecPosition = source->getPosition()-nb->getPosition();
-      point_t sourcekernelgradient = gradKernel(
+      point_t sourcekernelgradient = kernels::gradKernel(
           vecPosition,source->getSmoothinglength());
       point_t resultkernelgradient = sourcekernelgradient;
 
@@ -432,23 +417,8 @@ namespace physics{
  
 
   } // compute_hydro_acceleration
-#endif 
 
   /**
-   * @brief      Integrate the internal energy variation, update internal energy
-   *
-   * @param      srch  The source's body holder
-   */
-  void dudt_integration(
-      body_holder* srch)
-  {
-    body* source = srch->getBody(); 
-    source->setInternalenergy(
-      source->getInternalenergy()+dt*source->getDudt());
-  }
-
-#ifdef ADIABATIC 
-    /**
    * @brief      Integrate the internal energy variation, update internal energy
    *
    * @param      srch  The source's body holder
@@ -460,7 +430,7 @@ namespace physics{
     source->setAdiabatic(
       source->getAdiabatic()+dt*source->getDadt());
   }
-#endif 
+
 
   /**
    * @brief      Apply boundaries if they are set
@@ -524,36 +494,12 @@ namespace physics{
     return considered;
   }
 
-#if 0 
-  // \TODO VERSION USED IN THE BNS, CHECK VALIDITY REGARDING THE OTHER ONE 
-  void 
-  leapfrog_integration(
-      body_holder* srch)
-  {
-    body* source = srch->getBody();
-    
-
-    point_t velocity = source->getVelocityhalf()+
-      source->getAcceleration() * dt / 2.;
-    point_t velocityHalf = velocity+
-      source->getAcceleration() * dt / 2.;
-    point_t position = source->getPosition()+velocityHalf*dt;
-    // integrate dadt 
-    double adiabatic_factor = source->getAdiabatic() + source->getDadt()* dt;
-
-    source->setVelocity(velocity);
-    source->setVelocityhalf(velocityHalf);
-    source->setPosition(position);
-    source->setAdiabatic(adiabatic_factor);
-    
-    mpi_assert(!std::isnan(position[0])); 
-  }
-#endif
-
   /**
-   * @brief      Leapfrog integration, first step 
+   * @brief Leapfrog integration, first step 
+   *        TODO: deprecate; new Leapfrog should be implemented with
+   *              the kick-drift-kick formulae
    *
-   * @param      srch  The source's body holder
+   * @param srch  The source's body holder
    */
   void 
   leapfrog_integration_first_step(
@@ -587,9 +533,11 @@ namespace physics{
   }
 
   /**
-   * @brief      Leapfrog integration
+   * @brief Leapfrog integration
+   *        TODO: deprecate; new Leapfrog should be implemented with
+   *              the kick-drift-kick formulae
    *
-   * @param      srch  The source's body holder
+   * @param srch  The source's body holder
    */
   void 
   leapfrog_integration(
@@ -621,6 +569,81 @@ namespace physics{
     
     mpi_assert(!std::isnan(position[0])); 
   }
+
+
+  /*******************************************************/
+  /**
+   * @brief      v -> v12
+   *
+   * @param      srch  The source's body holder
+   */
+  void 
+  save_velocityhalf (body_holder* srch) {
+    body* source = srch->getBody();
+    source->setVelocityhalf(source->getVelocity());
+  }
+
+  /**
+   * @brief      Leapfrog: kick velocity
+   *             v^{n+1/2} = v^{n} + (dv/dt)^n * dt/2
+   *             or
+   *             v^{n+1} = v^{n+1/2} + (dv/dt)^n * dt/2
+   *
+   * @param      srch  The source's body holder
+   */
+  void 
+  leapfrog_kick_v (body_holder* srch) {
+    body* source = srch->getBody();
+    source->setVelocity(source->getVelocity()
+               + 0.5*dt*source->getAcceleration());
+  }
+
+
+  /**
+   * @brief      Leapfrog: kick internal energy
+   *             u^{n+1/2} = u^{n} + (du/dt)^n * dt/2
+   *             or
+   *             u^{n+1} = u^{n+1/2} + (du/dt)^n * dt/2
+   *
+   * @param      srch  The source's body holder
+   */
+  void 
+  leapfrog_kick_u (body_holder* srch) {
+    body* source = srch->getBody();
+    source->setInternalenergy(source->getInternalenergy()
+                     + 0.5*dt*source->getDudt());
+  }
+
+
+  /**
+   * @brief      Leapfrog: kick thermokinetic or total energy
+   *             e^{n+1/2} = e^{n} + (de/dt)^n * dt/2
+   *             or
+   *             e^{n+1} = e^{n+1/2} + (de/dt)^n * dt/2
+   *
+   * @param      srch  The source's body holder
+   */
+  void 
+  leapfrog_kick_e (body_holder* srch) {
+    body* source = srch->getBody();
+    source->setTotalenergy(source->getTotalenergy()
+                     + 0.5*dt*source->getDedt());
+  }
+
+
+  /**
+   * @brief      Leapfrog: drift
+   *             r^{n+1} = r^{n} + v^{n+1/2} * dt
+   *
+   * @param      srch  The source's body holder
+   */
+  void 
+  leapfrog_drift (body_holder* srch) {
+    body* source = srch->getBody();
+    source->setPosition(source->getPosition()
+                   + dt*source->getVelocity());
+  }
+
 
   /**
    * @brief      Compute the timestep from acceleration and mu 

@@ -72,6 +72,7 @@
 #include <sstream>
 #include <stdlib.h>
 #include <assert.h>
+#include <cstdbool>
 #include "cinchlog.h"
 #include "mpi.h"
 
@@ -144,9 +145,9 @@ namespace param {
   DECLARE_PARAM(int64_t,nparticles,1000)
 #endif
 
-//- square root of the total number of particles (for 2D setups)
-#ifndef sqrt_nparticles
-  DECLARE_PARAM(int64_t,sqrt_nparticles,100)
+//- particle lattice linear dimension
+#ifndef lattice_nx
+  DECLARE_PARAM(int64_t,lattice_nx,100)
 #endif
 
 //- SPH eta parameter, eta = h (rho/m)^1/D (Rosswog'09, eq.51)
@@ -165,8 +166,29 @@ namespace param {
 #endif
 
 //- which kernel to use
-#ifndef initial_data_prefix
-  DECLARE_STRING_PARAM(sph_kernel,"Wendland quintic")
+#ifndef sph_kernel
+  DECLARE_STRING_PARAM(sph_kernel,"Wendland C2")
+#endif
+
+//- sinc kernel power index
+#ifndef sph_sinc_index
+  DECLARE_PARAM(double,sph_sinc_index,4.0)
+#endif
+
+//
+// Geometric parameters
+//
+//- rectangular configuration parameters (e.g. sodtube in 2D/3D)
+#ifndef box_length
+  DECLARE_PARAM(double,box_length,3.0)
+#endif
+
+#ifndef box_width
+  DECLARE_PARAM(double,box_width,1.0)
+#endif
+
+#ifndef box_height
+  DECLARE_PARAM(double,box_height,1.0)
 #endif
 
 //
@@ -215,9 +237,22 @@ namespace param {
   DECLARE_PARAM(int32_t,out_h5data_every,10)
 #endif
 
+//- produce separate HDF5 file per iteration
+#ifndef out_h5data_separate_iterations
+  DECLARE_PARAM(bool,out_h5data_separate_iterations,false)
+#endif
+
 //
 // Viscosity and equation of state
 //
+//- which equation of state to use?
+//  * "ideal fluid" (default)
+//  * "polytropic"
+//  * "white dwarf"
+#ifndef eos_type
+  DECLARE_STRING_PARAM(eos_type,"ideal fluid")
+#endif
+
 //- polytropic index
 #ifndef poly_gamma
   DECLARE_PARAM(double,poly_gamma,1.4)
@@ -238,6 +273,44 @@ namespace param {
   DECLARE_PARAM(double,sph_viscosity_epsilon,0.01)
 #endif
 
+//
+// Gravity-related parameters
+//
+//- mac'n'cheese acceptance criteria
+# ifndef fmm_macangle
+  DECLARE_PARAM(double,fmm_macangle,0.0)
+# endif
+
+//- maximum mass per cell
+# ifndef fmm_max_cell_mass
+  DECLARE_PARAM(double,fmm_max_cell_mass, 1.0e-4)
+# endif
+
+
+//
+// Parameters for external acceleration
+//
+//- which external force to apply?
+//  * "none" (default)
+#ifndef external_force_type
+  DECLARE_STRING_PARAM(external_force_type,"none")
+#endif
+
+# ifndef zero_potential_poison_value
+  DECLARE_PARAM(double,zero_potential_poison_value, 0.0)
+# endif
+
+# ifndef extforce_sqwell_power
+  DECLARE_PARAM(double,extforce_sqwell_power, 5.0)
+# endif
+
+# ifndef extforce_sqwell_steepness
+  DECLARE_PARAM(double,extforce_sqwell_steepness, 1e6)
+# endif
+
+# ifndef thermokinetic_formulation
+  DECLARE_PARAM(bool,thermokinetic_formulation, true)
+# endif
 
 //
 // Specific apps
@@ -245,6 +318,11 @@ namespace param {
 /// number of Sodtest to run (1..5)
 #ifndef sodtest_num
   DECLARE_PARAM(unsigned short,sodtest_num,1)
+#endif
+
+// equal mass or equal particle separation switch for sodtube
+#ifndef equal_mass
+  DECLARE_PARAM(bool,equal_mass,true)
 #endif
 
 // characteristic density for an initial conditions
@@ -281,6 +359,38 @@ namespace param {
 // in Sedov test: set the lattice types
 # ifndef domain_type
   DECLARE_PARAM(int,domain_type,0)
+# endif
+
+// in several tests: initial velocity of the flow
+# ifndef flow_velocity
+  DECLARE_PARAM(double,flow_velocity,0.0)
+# endif
+
+//
+// Airfoil parameters
+//
+# ifndef airfoil_size
+  DECLARE_PARAM(double,airfoil_size, 2.0)
+# endif
+
+# ifndef airfoil_thickness
+  DECLARE_PARAM(double,airfoil_thickness, 0.05)
+# endif
+
+# ifndef airfoil_camber
+  DECLARE_PARAM(double,airfoil_camber, 0.1)
+# endif
+
+# ifndef airfoil_anchor_x
+  DECLARE_PARAM(double,airfoil_anchor_x, -1.0)
+# endif
+
+# ifndef airfoil_anchor_y
+  DECLARE_PARAM(double,airfoil_anchor_y, 0.0)
+# endif
+
+# ifndef airfoil_attack_angle
+  DECLARE_PARAM(double,airfoil_attack_angle, 0.0)
 # endif
 
 // ---
@@ -323,7 +433,10 @@ void set_param(const std::string& param_name,
   // for boolean parameters
   bool lparam_value = (str_value == "yes"
                     or str_value == "'yes'"
-                    or str_value == "\"yes\"");
+                    or str_value == "\"yes\""
+                    or str_value == "true"
+                    or str_value == "'true'"
+                    or str_value == "\"true\"");
   // timestepping and iterations --------------------------------------------
 # ifndef initial_iteration
   READ_NUMERIC_PARAM(initial_iteration)
@@ -351,8 +464,8 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(nparticles)
 # endif
 
-# ifndef sqrt_nparticles
-  READ_NUMERIC_PARAM(sqrt_nparticles)
+# ifndef lattice_nx
+  READ_NUMERIC_PARAM(lattice_nx)
 # endif
 
 # ifndef sph_eta
@@ -369,6 +482,23 @@ void set_param(const std::string& param_name,
 
 # ifndef initial_data_prefix
   READ_STRING_PARAM(sph_kernel)
+# endif
+
+# ifndef sph_sinc_index
+  READ_NUMERIC_PARAM(sph_sinc_index)
+# endif
+
+  // geometric configuration  -----------------------------------------------
+# ifndef box_length
+  READ_NUMERIC_PARAM(box_length)
+# endif
+
+# ifndef box_width
+  READ_NUMERIC_PARAM(box_width)
+# endif
+
+# ifndef box_height
+  READ_NUMERIC_PARAM(box_height)
 # endif
 
   // boundary conditions  ---------------------------------------------------
@@ -405,7 +535,15 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(out_h5data_every)
 # endif
 
+# ifndef out_h5data_separate_iterations
+  READ_BOOLEAN_PARAM(out_h5data_separate_iterations)
+# endif
+
   // viscosity and equation of state ----------------------------------------
+# ifndef eos_type
+  READ_STRING_PARAM(eos_type)
+# endif
+
 # ifndef poly_gamma
   READ_NUMERIC_PARAM(poly_gamma)
 # endif
@@ -422,10 +560,44 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(sph_viscosity_epsilon)
 # endif
 
+  // gravity-related  -------------------------------------------------------
+# ifndef fmm_macangle
+  READ_NUMERIC_PARAM(fmm_macangle)
+# endif
+
+# ifndef fmm_max_cell_mass
+  READ_NUMERIC_PARAM(fmm_max_cell_mass)
+# endif
+
+  // external force  --------------------------------------------------------
+#ifndef external_force_type
+  READ_STRING_PARAM(external_force_type)
+#endif
+
+# ifndef zero_potential_poison_value
+  READ_NUMERIC_PARAM(zero_potential_poison_value)
+# endif
+
+# ifndef extforce_sqwell_power
+  READ_NUMERIC_PARAM(extforce_sqwell_power)
+# endif
+
+# ifndef extforce_sqwell_steepness
+  READ_NUMERIC_PARAM(extforce_sqwell_steepness)
+# endif
+
+# ifndef thermokinetic_formulation
+  READ_BOOLEAN_PARAM(thermokinetic_formulation)
+# endif
+
   // specific apps  ---------------------------------------------------------
 # ifndef sodtest_num
   READ_NUMERIC_PARAM(sodtest_num)
 # endif
+
+#ifndef equal_mass
+  READ_BOOLEAN_PARAM(equal_mass)
+#endif
 
 # ifndef rho_initial
   READ_NUMERIC_PARAM(rho_initial)
@@ -454,6 +626,36 @@ void set_param(const std::string& param_name,
 # ifndef domain_type
   READ_NUMERIC_PARAM(domain_type)
 # endif
+
+# ifndef flow_velocity
+  READ_NUMERIC_PARAM(flow_velocity)
+# endif
+
+  // airfoil parameters  ----------------------------------------------------
+# ifndef airfoil_size
+  READ_NUMERIC_PARAM(airfoil_size)
+# endif
+
+# ifndef airfoil_thickness
+  READ_NUMERIC_PARAM(airfoil_thickness)
+# endif
+
+# ifndef airfoil_camber
+  READ_NUMERIC_PARAM(airfoil_camber)
+# endif
+
+# ifndef airfoil_anchor_x
+  READ_NUMERIC_PARAM(airfoil_anchor_x)
+# endif
+
+# ifndef airfoil_anchor_y
+  READ_NUMERIC_PARAM(airfoil_anchor_y)
+# endif
+
+# ifndef airfoil_attack_angle
+  READ_NUMERIC_PARAM(airfoil_attack_angle)
+# endif
+
   // unknown parameter -------------------------------
   if (unknown_param) {
     clog_one(fatal) << "ERROR: unknown parameter " << param_name << endl;

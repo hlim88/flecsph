@@ -25,6 +25,14 @@
 \usepackage{fancyhdr}
 \usepackage{subfiles} 
 
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,      
+    urlcolor=cyan,
+}
+
 \topmargin 0.30in
 \textheight 9.00in
 \parindent 0.0in
@@ -41,19 +49,17 @@
 \maketitle
 
 \subfile{FleCSI}
-\subfile{Domain_and_tree_construction}
-\subfile{Trees}
+\subfile{Tree}
 \subfile{General_algorithm}
 \subfile{IO}
-\subfile{SPH_formulations_in_FleCSPH}
+\subfile{Formulations}
+\subfile{Kernels}
+\subfile{Equations_of_state}
+\subfile{Initial_data}
 \subfile{Time_integration}
+\subfile{Gravitation}
 \subfile{Resolution_order}
-\subfile{Hydrostatic_equilibrium}
 \subfile{Applications}
-\subfile{Gravitation_computation}
-
-
-
 
 \nocite{*}
 \bibliographystyle{plain}

@@ -28,8 +28,7 @@
 
 #define OUTPUT
 
-#warning "CHANGE TO FLECSI ONE"
-#include "tree_topology.h"
+#include "tree_topology.h" // CHANGE TO FLECSI ONE!!!
 #include "flecsi/geometry/point.h"
 #include "flecsi/geometry/space_vector.h"
 
@@ -50,6 +49,7 @@ public:
       const double density, 
       const double pressure, 
       const double entropy, 
+      const double electronFraction,
       const double mass,
       const double smoothinglength
   ):  position_(position), 
@@ -60,16 +60,15 @@ public:
       pressure_(pressure),
       //entropy_(entropy),
       mass_(mass),
+      //electronFraction_(electronFraction),
       smoothinglength_(smoothinglength),
       soundspeed_(0.0)
-      #ifdef INTERNAL_ENERGY 
       ,internalenergy_(0.0)
+      ,totalenergy_(0.0)
       ,dudt_(0.0)
-      #endif
-      #ifdef ADIABATIC
+      ,dedt_(0.0)
       ,adiabatic_(0.0)
       ,dadt_(0.0)
-      #endif 
       //gravforce_(point_t{}),
       //hydroforce_(point_t{})
   {};
@@ -84,6 +83,7 @@ public:
   double getPressure() const{return pressure_;}
   double getSoundspeed() const{return soundspeed_;}
   //double getEntropy() const{return entropy_;}
+  //double getElectronFraction() const{return electronFraction_;}
   double getDensity() const{return density_;}
   point_t getVelocity() const{return velocity_;}
   //point_t getHydroForce() const{return hydroforce_;}
@@ -124,19 +124,19 @@ public:
   void setType(int type){type_ = type;}; 
 
   // Dependent of the problem 
-  #ifdef INTERNAL_ENERGY
     double getInternalenergy() const{return internalenergy_;}
     void setInternalenergy(double internalenergy)
-        {internalenergy_=internalenergy;};
+        {internalenergy_=internalenergy;}
+    double getTotalenergy() const{return totalenergy_;}
+    void setTotalenergy(double totalenergy) {totalenergy_=totalenergy;}
     void setDudt(double dudt){dudt_ = dudt;};
+    void setDedt(double dedt){dedt_ = dedt;};
     double getDudt(){return dudt_;};
-  #endif 
-  #ifdef ADIABATIC
+    double getDedt(){return dudt_;};
     double getAdiabatic() const{return adiabatic_;}
     void setAdiabatic(double adiabatic){adiabatic_ = adiabatic;};
     double getDadt() const{return dadt_;};
     void setDadt(double dadt){dadt_ = dadt;};
-  #endif 
   #ifdef VERLET
     double getDensityNM1(){return densityNM1_;};
     point_t getVelocityCor(){return velocityCor_;};
@@ -185,14 +185,12 @@ private:
   double mass_;
   double smoothinglength_; 
   double soundspeed_;
-  #ifdef INTERNAL_ENERGY
   double internalenergy_;
+  double totalenergy_;
   double dudt_;
-  #endif
-  #ifdef ADIABATIC
+  double dedt_;
   double adiabatic_; 
   double dadt_;
-  #endif 
   #ifdef VERLET
   double densityNM1_;
   point_t velocityCor_;
