@@ -175,6 +175,12 @@ namespace param {
   DECLARE_PARAM(double,sph_sinc_index,4.0)
 #endif
 
+//- if true, recompute (uniform) smoothing length every timestep 
+//  h = average { sph_eta (m/rho)^1/D } (Rosswog'09, eq.51)
+# ifndef sph_update_uniform_h
+  DECLARE_PARAM(bool, sph_update_uniform_h,false)
+# endif 
+
 //
 // Geometric parameters
 //
@@ -189,6 +195,10 @@ namespace param {
 
 #ifndef box_height
   DECLARE_PARAM(double,box_height,1.0)
+#endif
+
+#ifndef sphere_radius
+  DECLARE_PARAM(double,sphere_radius,1.0)
 #endif
 
 //
@@ -286,6 +296,31 @@ namespace param {
   DECLARE_PARAM(double,fmm_max_cell_mass, 1.0e-4)
 # endif
 
+//
+// Drag force parameters
+//
+// HL : These parameters are used to relax star from 
+//      initial star in both single and binary system.
+//      Drag force is applied to acceleration computation
+//      during beginning of steps.
+//      If we have some IDs that do not require relaxation,
+//      this can be neglected
+//
+//- Do drag froce boolean
+#ifndef do_drag
+  DECLARE_PARAM(bool,do_drag,false)
+#endif
+
+//- relaxation steps
+# ifndef relax_steps
+  DECLARE_PARAM(int,relax_steps,10)
+# endif
+
+//- Drag force coefficients. 
+# ifndef drag_coeff
+  DECLARE_PARAM(double,drag_coeff,1.e-6)
+# endif
+
 
 //
 // Parameters for external acceleration
@@ -300,12 +335,12 @@ namespace param {
   DECLARE_PARAM(double,zero_potential_poison_value, 0.0)
 # endif
 
-# ifndef extforce_sqwell_power
-  DECLARE_PARAM(double,extforce_sqwell_power, 5.0)
+# ifndef extforce_wall_powerindex
+  DECLARE_PARAM(double,extforce_wall_powerindex, 5.0)
 # endif
 
-# ifndef extforce_sqwell_steepness
-  DECLARE_PARAM(double,extforce_sqwell_steepness, 1e6)
+# ifndef extforce_wall_steepness
+  DECLARE_PARAM(double,extforce_wall_steepness, 1e6)
 # endif
 
 # ifndef thermokinetic_formulation
@@ -414,6 +449,13 @@ std::string trim(const std::string& str) {
  */
 void set_param(const std::string& param_name,
                const std::string& param_value) {
+  
+  // RANK/SIZE for CLOG output 
+  int rank = 0;
+  int size = 1; 
+  MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+  MPI_Comm_size(MPI_COMM_WORLD,&size);
+
   using namespace std;
   bool unknown_param = true;
 
@@ -488,6 +530,10 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(sph_sinc_index)
 # endif
 
+# ifndef sph_update_uniform_h
+  READ_BOOLEAN_PARAM(sph_update_uniform_h)
+# endif 
+
   // geometric configuration  -----------------------------------------------
 # ifndef box_length
   READ_NUMERIC_PARAM(box_length)
@@ -499,6 +545,10 @@ void set_param(const std::string& param_name,
 
 # ifndef box_height
   READ_NUMERIC_PARAM(box_height)
+# endif
+
+# ifndef sphere_radius
+  READ_NUMERIC_PARAM(sphere_radius)
 # endif
 
   // boundary conditions  ---------------------------------------------------
@@ -569,7 +619,20 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(fmm_max_cell_mass)
 # endif
 
-  // external force  --------------------------------------------------------
+// Drag force parameters ---------------------------------------------------
+#ifndef do_drag
+  READ_BOOLEAN_PARAM(do_drag)
+#endif
+
+# ifndef relax_steps
+  READ_NUMERIC_PARAM(relax_steps)
+# endif
+
+# ifndef drag_coeff
+  READ_NUMERIC_PARAM(drag_coeff)
+# endif
+
+// external force  --------------------------------------------------------
 #ifndef external_force_type
   READ_STRING_PARAM(external_force_type)
 #endif
@@ -578,12 +641,12 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(zero_potential_poison_value)
 # endif
 
-# ifndef extforce_sqwell_power
-  READ_NUMERIC_PARAM(extforce_sqwell_power)
+# ifndef extforce_wall_powerindex
+  READ_NUMERIC_PARAM(extforce_wall_powerindex)
 # endif
 
-# ifndef extforce_sqwell_steepness
-  READ_NUMERIC_PARAM(extforce_sqwell_steepness)
+# ifndef extforce_wall_steepness
+  READ_NUMERIC_PARAM(extforce_wall_steepness)
 # endif
 
 # ifndef thermokinetic_formulation
@@ -658,11 +721,11 @@ void set_param(const std::string& param_name,
 
   // unknown parameter -------------------------------
   if (unknown_param) {
-    clog_one(fatal) << "ERROR: unknown parameter " << param_name << endl;
+    clog(error) << "ERROR: unknown parameter " << param_name << endl;
     exit(2);
   }
 
-  clog_one(trace) << param_name << ": " << param_value << endl;
+  rank || clog(trace) << param_name << ": " << param_value << endl;
 }
 
 /**
@@ -762,8 +825,8 @@ void mpi_read_params(const char * parameter_file) {
   MPI_Bcast(&len, 1, MPI_INT, 0, MPI_COMM_WORLD);
   MPI_Bcast(parfile, len+1, MPI_CHAR, 0, MPI_COMM_WORLD);
 
-  clog(trace) << "Parameter file name on rank " << rank
-              << ": " << parfile << std::endl << std::flush;
+  rank || clog(trace) << "Parameter file name on rank " << rank << " over "<<
+              size << ": " << parfile << std::endl << std::flush;
 
   // queue ranks to read the parfile sequentially;
   // wait for a message from previous rank, unless this is rank 0

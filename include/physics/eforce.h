@@ -59,8 +59,8 @@ namespace external_force {
     box[0] = 0.0;
     box[1] = 0.5*box_width;
     box[2] = 0.5*box_height;
-    const double pw_n = extforce_sqwell_power;
-    const double pw_a = extforce_sqwell_steepness;
+    const double pw_n = extforce_wall_powerindex;
+    const double pw_a = extforce_wall_steepness;
     for (unsigned short i=1; i<gdimension; ++i) {
       a[i]  = (((rp[i] <- box[i]) ? pow(-rp[i]- box[i], pw_n - 1) : 0.0)
               -((rp[i] >  box[i]) ? pow(rp[i] - box[i], pw_n - 1) : 0.0))
@@ -77,13 +77,52 @@ namespace external_force {
     box[0] = 0.0;
     box[1] = 0.5*box_width;
     box[2] = 0.5*box_height;
-    const double pw_n = extforce_sqwell_power;
-    const double pw_a = extforce_sqwell_steepness;
+    const double pw_n = extforce_wall_powerindex;
+    const double pw_a = extforce_wall_steepness;
     for (unsigned short i=1; i<gdimension; ++i) {
       phi += (((rp[i] <- box[i]) ? pow(-rp[i]- box[i], pw_n) : 0.0)
              +((rp[i] >  box[i]) ? pow(rp[i] - box[i], pw_n) : 0.0))
             *pw_a;
     }
+    return phi;
+  }
+
+
+  /**
+   * @brief      Round or spherical boundary wall
+   * @param      srch  The source's body holder
+   */
+  point_t acceleration_spherical_wall(body_holder* srch) {
+    using namespace param;
+    point_t a = 0.0;
+    point_t rp =  srch->getBody()->getPosition();
+    const double pw_n = extforce_wall_powerindex;
+    const double pw_a = extforce_wall_steepness;
+    double r = rp[0]*rp[0];
+    for (unsigned short i=1; i<gdimension; ++i) 
+      r += rp[i]*rp[i];
+    r = sqrt(r);
+    if (r > sphere_radius) {
+      const double ar = pw_n*pw_a*pow(r - sphere_radius, pw_n - 1);
+      for (unsigned short i=0; i<gdimension; ++i) 
+        a[i] = -rp[i]/r * ar;
+    }
+     
+    return a;
+  }
+
+  double potential_spherical_wall(body_holder* srch) {
+    using namespace param;
+    double phi = 0.0;
+    point_t rp =  srch->getBody()->getPosition();
+    const double pw_n = extforce_wall_powerindex;
+    const double pw_a = extforce_wall_steepness;
+    double r = rp[0]*rp[0];
+    for (unsigned short i=1; i<gdimension; ++i) 
+      r += rp[i]*rp[i];
+    r = sqrt(r);
+    if (r > sphere_radius) 
+      phi = pw_a*pow(r - sphere_radius, pw_n);
     return phi;
   }
 
@@ -115,8 +154,8 @@ namespace external_force {
     const double x1 = rp[0] - airfoil_anchor_x,
                  y1 = rp[1] - airfoil_anchor_y,
                  alpha = airfoil_attack_angle*M_PI/180.0,
-                 pw_n = extforce_sqwell_power,
-                 pw_a = extforce_sqwell_steepness;
+                 pw_n = extforce_wall_powerindex,
+                 pw_a = extforce_wall_steepness;
     const double x = x1*cos(alpha) + y1*sin(alpha),
                  y =-x1*sin(alpha) + y1*cos(alpha);
 
@@ -149,8 +188,8 @@ namespace external_force {
     const double x1 = rp[0] - airfoil_anchor_x,
                  y1 = rp[1] - airfoil_anchor_y,
                  alpha = airfoil_attack_angle*M_PI/180.0,
-                 pw_n = extforce_sqwell_power,
-                 pw_a = extforce_sqwell_steepness;
+                 pw_n = extforce_wall_powerindex,
+                 pw_a = extforce_wall_steepness;
     const double x = x1*cos(alpha) + y1*sin(alpha),
                  y =-x1*sin(alpha) + y1*cos(alpha);
 
@@ -165,6 +204,29 @@ namespace external_force {
     return phi + potential_squarewell_yz(srch);
   }
 
+  /**
+   * @brief      Drag case : apply drag force to 
+   * 	         relax the initial star during initial
+   * 	         few steps
+   * @param      srch  The source's body holder
+   */
+  point_t acceleration_do_drag(body_holder* srch) {
+    using namespace param;
+    body* source = srch->getBody();
+    int64_t iteration = 0;
+    point_t a = 0.0;
+    if(do_drag && iteration <= relax_steps){
+      //Redefine drag coefficient with dt
+      double drag_coeff_dt = drag_coeff/initial_dt;
+      a -=drag_coeff_dt*source->getVelocity();
+    }
+    return a;
+  }
+
+  double potential_do_drag(body_holder* srch) {
+    // No potential for dragging. Only du/dt = 0 during relaxation
+    return 0.0; // POISON IT
+  }
 
   // acceleration and potential function types and pointers
   typedef double  (*potential_t)(body_holder*);
@@ -185,9 +247,17 @@ namespace external_force {
       potential = potential_squarewell_yz;
       acceleration = acceleration_squarewell_yz;
     }
+    else if (boost::iequals(efstr,"spherical wall")) {
+      potential = potential_spherical_wall;
+      acceleration = acceleration_spherical_wall;
+    }
     else if (boost::iequals(efstr,"airfoil")) {
       potential = potential_airfoil;
       acceleration = acceleration_airfoil;
+    }
+    else if (boost::iequals(efstr,"drag")) {
+      potential = potential_do_drag;
+      acceleration = acceleration_do_drag;
     }
     else {
       clog_one(fatal) << "ERROR: bad external_force_type" << std::endl;

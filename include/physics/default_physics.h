@@ -221,6 +221,7 @@ namespace physics{
     body_holder* srch, 
     std::vector<body_holder*>& ngbsh)
   { 
+    using namespace param;
     body* source = srch->getBody();
 
     // Reset the accelerastion 
@@ -305,6 +306,11 @@ namespace physics{
     double P_a = source->getPressure();
     double rho_a = source->getDensity();
     dudt = P_a/(rho_a*rho_a)*dudt_pressure + .5*dudt_visc;
+
+    //Do not change internal energy during relaxation
+    if(do_drag && iteration <= relax_steps){
+       dudt = 0.0;
+    }
 
     source->setDudt(dudt);
   } // compute_dudt
@@ -686,6 +692,31 @@ namespace physics{
     physics::dt = std::min(dt,min);
   }
 
+  /**
+   * @brief update smoothing length for particles (Rosswog'09, eq.51)
+   * 
+   * ha = eta/N \sum_b pow(m_b / rho_b,1/dimension)
+   */
+  void
+  compute_average_smoothinglength(
+      std::vector<body_holder*>& bodies,
+      int64_t nparticles)
+  {
+    // Compute the total 
+    double total = 0.;
+    for(auto b: bodies) {
+      total += pow(b->getBody()->getMass()/b->getBody()->getDensity(),
+          1./(double)gdimension);
+    }
+    // Add up with all the processes 
+    MPI_Allreduce(MPI_IN_PLACE,&total,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
+    // Compute the new smoothing length 
+    double new_h = sph_eta/(double)nparticles * total;
+    for(auto b: bodies) { 
+      b->getBody()->setSmoothinglength(new_h);
+    }
+  }
+  
 
 
 
