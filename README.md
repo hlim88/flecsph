@@ -1,6 +1,6 @@
 ![logo](doc/flecsph_logo_bg.png)
 
-[![Build Status](https://travis-ci.org/laristra/flecsph.svg?branch=master)](https://travis-ci.org/laristra/flecsph)
+[![Build Status](https://travis-ci.com/laristra/flecsph.svg?branch=master)](https://travis-ci.com/laristra/flecsph)
 [![codecov.io](https://codecov.io/github/laristra/flecsph/coverage.svg?branch=master)](https://codecov.io/github/laristra/flecsph?branch=master)
 <!---
 [![Quality Gate](https://sonarqube.com/api/badges/gate?key=flecsph%3A%2Fmaster)](https://sonarqube.com/dashboard?id=flecsph%3A%2Fmaster)
@@ -10,7 +10,7 @@
 
 This project implements smoothed particles hydrodynamics (SPH) method of
 simulating fluids and gases using the FleCSI framework.
-Currently, particle affinity and gravitation is handled using the parallel 
+Currently, particle affinity and gravitation is handled using the parallel
 implementation of the octree data structure provided by FleCSI.
 
 We provide several examples of physics problems in 1D, 2D and 3D:
@@ -18,36 +18,27 @@ We provide several examples of physics problems in 1D, 2D and 3D:
 - Sod shock tubes in 1D/2D/3D;
 - Noh shock test in 2D/3D;
 - Sedov blast waves 2D and 3D;
-- airfoil flow in a wind tunnel (2D/3D); 
-- pressure-induced spherical implosion (2D/3D); 
+- airfoil flow in a wind tunnel (2D/3D);
+- pressure-induced spherical implosion (2D/3D);
 - single and binary stars with Newtonian gravity in 3D.
 
 # Building the FleCSPH
 
 FleCSPH can be installed anywhere in your system; to be particular, below we
 assume that all repositories are downloaded in FLECSPH root directory `${HOME}/FLECSPH`.
-The code requires:
-
-- FleCSI third party library
-- FleCSI
-- shared local directory
 
 ## Suggested directory structure
 
-We recommend to use and isolated installation of FleCSPH, FleCSI and all their 
+We recommend to use an isolated installation of FleCSPH and FleCSI, such that the software and all their
 dependencies in a separate directory, with the following directory structure:
 
 ```{engine=sh}
   ${HOME}/FLECSPH
   ├── flecsi
   │   └── build
-  ├── flecsi-third-party
-  │   └── build
   ├── flecsph
   │   ├── build
   │   └── third-party-libraries
-  │       ├── install_h5hut.sh
-  │       └── install_hdf5_parallel.sh
   └── local
       ├── bin
       ├── include
@@ -56,8 +47,8 @@ dependencies in a separate directory, with the following directory structure:
       └── share
 ```
 
-In this configuration, all dependencies are installed in `${HOME}/FLECSPH/local`.
-Set your CMAKE prefix to this location:
+Below we use `${HOME}/FLECSPH/local` for an installation directory.
+Make sure to set your CMAKE prefix to this location:
 
     % export CMAKE_PREFIX_PATH=${HOME}/FLECSPH/local
 
@@ -67,33 +58,13 @@ You will need the following tools:
 
 - C++17 - capable compiler, such as gcc version >= 7;
 - git version > 2.14;
-- MPI libraries, compiled with the gcc compiler above and multithread support 
-  (`--enable-mpi-thread-multiple` for OpenMPI and 
+- MPI libraries, compiled with the gcc compiler above and multithread support
+  (`--enable-mpi-thread-multiple` for OpenMPI and
    `--enable-threads=multiple` for MPICH);
 - cmake version > 3.7;
 - boost library version > 1.59;
 - Python version > 2.7.
-
-## FleCSI third-party libraries
-
-Clone the FleCSI third-party libraries repo and check out the compatible branch `FleCSPH`:
-
-```{engine=sh}    
-   cd $HOME/FLECSPH
-   git clone --recursive git@github.com:laristra/flecsi-third-party.git
-   cd flecsi-third-party
-   git submodule update --recursive
-   mkdir build ; cd build
-   cmake .. \
-        -DGASNet_CONDUIT=mpi \
-        -DENABLE_EXODUS=OFF -DENABLE_HPX=OFF \
-        -DCMAKE_INSTALL_PREFIX=${HOME}/FLECSPH/local
-```    
-
-Build the libraries using several cores:
-
-    % make -j
-    % make install
+- HDF5 compiled with parallel flag version > 1.8
 
 ## FleCSI
 
@@ -101,32 +72,31 @@ Clone FleCSI repo and change to the `feature/flecsph` branch.
 Checkout submodules recursively, then configure as below:
 
 ```{engine=sh}    
+   export CMAKE_PREFIX_PATH=${HOME}/FLECSPH/local
    cd $HOME/FLECSPH
    git clone --recursive git@github.com:laristra/flecsi.git
    cd flecsi
    git checkout feature/flecsph
    git submodule update --recursive
    mkdir build ; cd build
-   export CMAKE_PREFIX_PATH=${HOME}/FLECSPH/local
    cmake .. \
-       -DCMAKE_INSTALL_PREFIX=$HOME/FLECSPH/local \
+       -DCMAKE_INSTALL_PREFIX=$CMAKE_PREFIX_PATH  \
        -DENABLE_MPI=ON                            \
        -DENABLE_MPI_CXX_BINDINGS=ON               \
        -DENABLE_OPENMP=ON                         \
        -DCXX_CONFORMANCE_STANDARD=c++17           \
        -DENABLE_CLOG=ON                           \
-       -DFLECSI_RUNTIME_MODEL=mpi
+       -DFLECSI_RUNTIME_MODEL=mpi                 \
+       -DENABLE_FLECSIT=OFF                       \
+       -DENABLE_FLECSI_TUTORIAL=OFF               
 ```    
 
-In this configuration, Legion is used as FleCSI backend.
-If no errors appeared, build and install:
+In this configuration, MPI is used as FleCSI backend.
+If you want to use other FleCSI backends (Legion, HPX), you will need to install them separately: see https://github.com/laristra/flecsi-third-party for further info.
 
-    % make -j
-    % make install 
+In a final step, build and install:
 
-In case of errors: if you are rebuilding everything from scratch, 
-make sure that your installation directory (`$HOME/FLECSPH/local` 
-in our example) is empty.
+    % make -j install
 
 ## FleCSPH
 
@@ -136,47 +106,36 @@ Clone the master branch from the FleCSPH git repo:
    git clone --recursive git@github.com:laristra/flecsph.git
 ```    
 
-### FleCSPH/third-party-libraries: some more dependencies
-
-FleCSPH has specific HDF5 dependencies which need to be built; they 
-are located in `flecsph/third-party-libraries/` directory.
-Use the following scripts to install HDF5 and H5Hut from within 
-your build/ directory:
-
-```{engine=sh}
-   cd ~/FLECSPH/flecsph
-   mkdir build; cd build
-   ../third-party-libraries/install_hdf5_parallel.sh
-   ../third-party-libraries/install_h5hut.sh
-```    
-
 ### Building FleCSPH
 
-Configure and build FleCSPH:
+Configure command:
 
 ```{engine=sh}
    # in ${HOME}/FLECSPH/build:
+   export CMAKE_PREFIX_PATH=${HOME}/FLECSPH/local
    cmake .. \
-       -DCMAKE_INSTALL_PREFIX=$HOME/FLECSPH/local \
+       -DCMAKE_INSTALL_PREFIX=$CMAKE_PREFIX_PATH  \
        -DENABLE_MPI=ON                            \
        -DENABLE_OPENMP=ON                         \
        -DENABLE_UNIT_TESTS=ON                     \
        -DCXX_CONFORMANCE_STANDARD=c++17           \
        -DENABLE_CLOG=ON                           \
-       -DCMAKE_CXX_FLAGS=-DPARALLEL_IO            \
-       -DHDF5_IS_PARALLEL=ON
+       -DENABLE_MPI_THREAD_MULTIPLE=ON            \
+       -DHDF5_IS_PARALLEL=ON                      \
+       -DCLOG_STRIP_LEVEL=1                       \
+       -DENABLE_UNIT_TESTS=ON                     \
+       -Wno-dev
 ```
 
-Configure, build and install:
+Build and install:
 
-    % make -j
-    % make install
+    % make -j install
 
 
 ### Building FleCSPH on various architectures
 Architecture-/machine-specific notes for building FleCSPH are collected in
 [doc/machines](https://github.com/laristra/flecsph/tree/master/doc/machines).
-If you succeeded in compiling and running FleCSPH on new architectures, 
+If you succeeded in compiling and running FleCSPH on new architectures,
 please do not hesitate to share your recipe.
 We appreciate user contributions.
 
@@ -188,6 +147,7 @@ drivers: `hydro` and `newtonian`. Initial data generators are located in
 - `sodtube`: 1D/2D/3D sodtube shock test;
 - `sedov`: 2D and 3D Sedov blast wave;
 - `noh`: 2D and 3D Noh implosion test.
+- etc.
 
 Evolution drivers are located in `app/drivers`:
 
@@ -195,10 +155,10 @@ Evolution drivers are located in `app/drivers`:
 - `newtonian`: 3D hydro evolution with self-gravity.
 
 To run a test, you also need an input parameter file, specifying parameters of the
-problem. Parameter files are located in `data/` subdirectory. Running an 
+problem. Parameter files are located in `data/` subdirectory. Running an
 application consists of two steps:
 
-- generating intitial data;
+- generating initial data;
 - running evolution code.
 
 For instance, to run a `sodtube` 1D shock test, do the following (assuming
@@ -212,30 +172,30 @@ you are in your build directory after having successfully built FleCSPH):
 
 # Creating your own initial data or drivers
 You can add your own initial data generator or a new evolution module under
-`app/id_generators` or `app/drivers` directories. Create a directory with 
+`app/id_generators` or `app/drivers` directories. Create a directory with
 unique name for your project and modify `CMakeLists.txt` to inform the cmake
-system that your project needs to be built. 
+system that your project needs to be built.
 
 A new initial data generator usually has a single `main.cc` file and an optional
-include file. You can use existing interfaces for lattice generators or equations 
-of state in the `include/` directory. 
+include file. You can use existing interfaces for lattice generators or equations
+of state in the `include/` directory.
 The file `app/drivers/include/user.h` defines the dimensions of your problem, both
-for initial data generators and for the evolution drivers. 
+for initial data generators and for the evolution drivers.
 This is done via a compile-time macro `EXT_GDIMENSION`, which allows users to have
-the same source code for different problem dimensions. Actual dimension is set at 
+the same source code for different problem dimensions. Actual dimension is set at
 compile time via the `target_compile_definitions` directive of cmake, e.g.:
 ```
    target_compile_definitions(sodtube_1d_generator PUBLIC -DEXT_GDIMENSION=1)
    target_compile_definitions(sodtube_2d_generator PUBLIC -DEXT_GDIMENSION=2)
 ```
 
-A new evolution driver must have a `main.cc` and `main_driver.cc` files. Do not edit 
-`main.cc`, because FleCSI expects certain format of this file. It is easier to start 
-by copying existing files to your folder under `app/drivers`. Include cmake 
+A new evolution driver must have a `main.cc` and `main_driver.cc` files. Do not edit
+`main.cc`, because FleCSI expects certain format of this file. It is easier to start
+by copying existing files to your folder under `app/drivers`. Include cmake
 targets with different dimensions using examples in `app/drivers/CMakeLists.txt`.
 
-Make sure to document your subproject in a corresponding `README.md` file 
-that describes the problem you want to run. In order to get all files easily and 
+Make sure to document your subproject in a corresponding `README.md` file
+that describes the problem you want to run. In order to get all files easily and
 correctly, you can copy them from other subprojects such as `sodtube` or `hydro`.
 
 # For developers
@@ -248,11 +208,11 @@ FleCSPH follows the FleCSI coding style, which in turn follows (in general) the 
 FleCSI coding style is documented here:
 https://github.com/laristra/flecsi/blob/master/flecsi/style.md
 
-# Logs 
+# Logs
 
-Cinch Log is the logging tool for this project. 
-In order to display log set the environement variable as: 
-```bash 
+Cinch Log is the logging tool for this project.
+In order to display log set the environment variable as:
+```bash
 export CLOG_ENABLE_STDLOG=1
 ```
 
@@ -263,13 +223,12 @@ by default it is set to 0 (trace), but for simulations it is perhaps preferrable
 clog(trace) << "This is verbose output  (level 0)" << std::endl;
 clog(info) << "This is essential output (level 1)" << std::endl;
 clog(warn) << "This is a warning output (level 2)" << std::endl;
-clog(fatal) << "Farewell!" << std::endl; 
+clog(fatal) << "Farewell!" << std::endl;
 ```
 
-For further details, refer to the documentation at: 
+For further details, refer to the documentation at:
 https://github.com/laristra/cinch/blob/master/logging/README.md
 
  # Contacts
 
- If you have any questions or concerns regarding FleCSPH, please contact Julien Loiseau (julien.loiseau@univ-reims.fr), Oleg Korobkin (korobkin@lanl.gov) and/or Hyun Lim (hylim1988@gmail.com)
-
+ If you have any questions or concerns regarding FleCSPH, please contact Julien Loiseau (jloiseau@lanl.gov), Oleg Korobkin (korobkin@lanl.gov) and/or Hyun Lim (hylim1988@gmail.com)

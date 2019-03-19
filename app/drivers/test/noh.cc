@@ -15,8 +15,6 @@ namespace execution{
 using namespace flecsi;
 using namespace execution;
 
-TEST(sedov, working) {
-  //MPI_Init(NULL,NULL);
-  mpi_init_task("noh_sqn100.par");
-  //MPI_Finalize();
+TEST(noh, working) {
+  mpi_init_task("noh_nx20.par");
 }

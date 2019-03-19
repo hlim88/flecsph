@@ -1,18 +1,26 @@
 /*~--------------------------------------------------------------------------~*
- * Copyright (c) 2017 Los Alamos National Security, LLC
+ * Copyright (c) 2017 Triad National Security, LLC
  * All rights reserved.
  *~--------------------------------------------------------------------------~*/
 
 #include <iostream>
 #include <algorithm>
 #include <cassert>
+#include <random>
 #include <math.h>
 
 #include "user.h"
 #include "sedov.h"
 #include "params.h"
-#include "hdf5ParticleIO.h"
 #include "lattice.h"
+#include "kernels.h"
+#include "density_profiles.h"
+#include "io.h"
+using namespace io;
+#include "bodies_system.h"
+
+#define SQ(x) ((x)*(x))
+#define CU(x) ((x)*(x)*(x))
 
 /*
 The Sedov test is set up with uniform density and vanishingly small pressure.
@@ -52,33 +60,124 @@ void print_usage() {
 //
 // derived parameters
 //
-static double r_blast;      // Radius of injection region
-static std::string initial_data_file; // = initial_data_prefix + ".h5part"
+static double timestep = 1.0;         // Recommended timestep
+static double r_blast = 0.;           // Radius of injection region
+static double total_mass = 1.;        // total mass of the fluid
+static double mass_particle = 1.;     // mass of an individual particle
+static point_t bbox_max, bbox_min;    // bounding box of the domain
+static char initial_data_file[256];   // = initial_data_prefix[_XXXXX].h5part"
 
 void set_derived_params() {
   using namespace param;
 
-  // total number of particles
-  if (gdimension == 2) {
-    SET_PARAM(nparticles, lattice_nx*lattice_nx);
-  } 
-  else {
-    SET_PARAM(nparticles, lattice_nx*lattice_nx*lattice_nx);
+  density_profiles::select();
+  particle_lattice::select();
+
+  // The value for constant timestep
+  timestep = initial_dt;
+
+  // Bounding box of the domain
+  if (domain_type == 0) { // box
+    bbox_min[0] = -box_length/2.;
+    bbox_max[0] =  box_length/2.;
+    if constexpr (gdimension > 1) {
+      bbox_min[1] = -box_width/2.;
+      bbox_max[1] =  box_width/2.;
+    }
+    if constexpr (gdimension > 2) {
+      bbox_min[2] = -box_height/2.;
+      bbox_max[2] =  box_height/2.;
+    }
+  }
+  else if (domain_type == 1) { // sphere or circle
+    bbox_min = -sphere_radius;
+    bbox_max =  sphere_radius;
   }
 
-  SET_PARAM(uint_initial, (pressure_initial/(rho_initial*(poly_gamma-1.0))));
-  SET_PARAM(sph_smoothing_length, (5.*sph_separation));
-  r_blast = sedov_blast_radius * sph_separation;   // Radius of injection region
+  // particle separation
+  if (domain_type == 0) {
+    SET_PARAM(sph_separation, (box_length/(lattice_nx-1)));
+  }
+  else if (domain_type == 1) {
+    SET_PARAM(sph_separation, (2.*sphere_radius/(lattice_nx-1)));
+  }
 
-  // file to be generated
-  std::ostringstream oss;
-  oss << initial_data_prefix << ".h5part";
-  initial_data_file = oss.str();
+  // Count number of particles
+  int64_t tparticles =
+      particle_lattice::count(lattice_type,domain_type,
+      bbox_min,bbox_max,sph_separation,0);
+  SET_PARAM(nparticles, tparticles);
+
+  // total mass
+  if constexpr (gdimension == 1) {
+    total_mass = rho_initial * box_length;
+  }
+  if constexpr (gdimension == 2) {
+    if (domain_type == 0) // a box
+      total_mass = rho_initial * box_length*box_width;
+    else if (domain_type == 1) // a circle
+      total_mass = rho_initial * M_PI*SQ(sphere_radius);
+  }
+  if constexpr (gdimension == 3) {
+    if (domain_type == 0) { // a box
+      assert (boost::iequals(density_profile,"constant"));
+      total_mass = rho_initial * box_length*box_width*box_height;
+    }
+    else if (domain_type == 1) { // a sphere
+      //total_mass = rho_initial * 4./3.*M_PI*CU(sphere_radius);
+      // normalize mass such that central density is rho_initial
+      total_mass = rho_initial * CU(sphere_radius)
+                 / density_profiles::spherical_density_profile(0.0);
+    }
+  }
+
+  // single particle mass
+  assert (equal_mass);
+  mass_particle = total_mass / nparticles;
+
+  // set kernel
+  kernels::select();
+
+  // smoothing length
+  const double sph_h = sph_eta * kernels::kernel_width
+                               * pow(mass_particle/rho_initial,1./gdimension);
+  SET_PARAM(sph_smoothing_length, sph_h);
+
+  // intial internal energy
+  SET_PARAM(uint_initial, (pressure_initial/(rho_initial*(poly_gamma-1.0))));
+
+  // Radius of injection region
+  r_blast = sedov_blast_radius * sph_separation;
+
+  // Filename to be generated
+  bool input_single_file = H5P_fileExists(initial_data_prefix);  
+  if (input_single_file or initial_iteration == 0) 
+    sprintf(initial_data_file,"%s.h5part",initial_data_prefix);
+  else {
+    
+    // find the file with initial_iteration
+    int step = H5P_findIterationSnapshot(initial_data_prefix, 
+                                  param::initial_iteration);
+    // file doesn't exist: complain and exit
+    if (step < 0) {
+      clog(error) << "Cannot find iteration " << param::initial_iteration 
+                  <<" in prefix " << initial_data_prefix << std::endl;
+      exit(MPI_Barrier(MPI_COMM_WORLD) && MPI_Finalize());
+    }
+    sprintf(initial_data_file,"%s_%05d.h5part",initial_data_prefix,step);
+  }
 
 }
 
 int main(int argc, char * argv[]){
   using namespace param;
+
+  // check options list: exactly one option is allowed
+  if (argc != 2) {
+    std::cerr << "ERROR: parameter file not specified!" << std::endl;
+    print_usage();
+    exit(0);
+  }
 
   // launch MPI
   int rank, size;
@@ -87,206 +186,147 @@ int main(int argc, char * argv[]){
   assert(provided>=MPI_THREAD_MULTIPLE);
   MPI_Comm_rank(MPI_COMM_WORLD,&rank);
   MPI_Comm_size(MPI_COMM_WORLD,&size);
+  assert (size == 1); // parallel ID generator not implemented yet
   clog_set_output_rank(0);
-
-  // check options list: exactly one option is allowed
-  if (argc != 2) {
-    clog(error) << "ERROR: parameter file not specified!" << std::endl;
-    print_usage();
-    MPI_Finalize();
-    exit(0);
-  }
 
   // set simulation parameters
   param::mpi_read_params(argv[1]);
   set_derived_params();
+  body_system<double,gdimension> bs;
+  if (modify_initial_data) { 
+    bs.read_bodies(initial_data_prefix,"",initial_iteration);
+    SET_PARAM(nparticles, bs.getNBodies());
+  }
+  else {
+    bs.getLocalbodies().clear();
+    bs.getLocalbodies().resize(nparticles);
+  }
+  auto & bodies = bs.getLocalbodies();
 
-  particle_lattice::select();
+  // Declare coordinate arrays
+  double* x = new double[nparticles]();
+  double* y = new double[nparticles]();
+  double* z = new double[nparticles]();
 
-  // Header data
-  // the number of particles = nparticles
-  // The value for constant timestep
-  double timestep = initial_dt;
-  double radius   = sph_separation*(lattice_nx-1.)/2.;
-  const point_t bbox_max = radius;
-  const point_t bbox_min = -radius;
+  if (not modify_initial_data) { 
+    // Generate the lattice
+    assert(nparticles ==
+        particle_lattice::generate(lattice_type,domain_type,
+        bbox_min,bbox_max,sph_separation,0, x, y, z));
 
-  // Central coordinates: in most cases this should be centered at (0,0,0)
-  double x_c = 0.0;
-  double y_c = 0.0;
-  double z_c = 0.0;
+    for (int64_t a=0L; a<nparticles; ++a) {
+      body& particle = bodies[a];
+      if constexpr (gdimension == 1) {
+        point_t pos = {x[a]};
+        particle.set_coordinates(pos);
+      }
 
-  // Count number of particles
-  int64_t tparticles = 
-      particle_lattice::count(lattice_type,domain_type,
-      bbox_min,bbox_max,sph_separation,0); 
+      if constexpr (gdimension == 2) {
+        point_t pos = {x[a],y[a]};
+        particle.set_coordinates(pos);
+      }
 
-  // Initialize the arrays to be filled later
-  // Position
-  double* x = new double[tparticles]();
-  double* y = new double[tparticles]();
-  double* z = new double[tparticles]();
-  // Velocity
-  double* vx = new double[tparticles]();
-  double* vy = new double[tparticles]();
-  double* vz = new double[tparticles]();
-  // Acceleration
-  double* ax = new double[tparticles]();
-  double* ay = new double[tparticles]();
-  double* az = new double[tparticles]();
-  // Smoothing length
-  double* h = new double[tparticles]();
-  // Density
-  double* rho = new double[tparticles]();
-  // Internal Energy
-  double* u = new double[tparticles]();
-  // Pressure
-  double* P = new double[tparticles]();
-  // Mass
-  double* m = new double[tparticles]();
-  // Id
-  int64_t* id = new int64_t[tparticles]();
-  // Timestep
-  double* dt = new double[tparticles]();
-
-  // Generate the lattice
-  assert(tparticles ==
-      particle_lattice::generate(lattice_type,domain_type,
-      bbox_min,bbox_max,sph_separation,0, x, y, z));
-
-  // particle id number
-  int64_t posid = 0;
+      if constexpr (gdimension == 3) {
+        point_t pos = {x[a],y[a],z[a]};
+        particle.set_coordinates(pos);
+      }
+    }
+  }
 
   // Number of particles in the blast zone
   int64_t particles_blast = 0;
 
   // Total mass of particles in the blast zone
   double mass_blast = 0;
-  double mass;
-  if(gdimension==2){
-    mass = rho_initial * M_PI*pow(radius,2.)/tparticles;
-  } else{
-    mass = rho_initial * 4./3.*M_PI*pow(radius,3.)/tparticles;
+
+  // Count the number of particles and mass in the blast zone
+  // The blast is centered at the origin ({0,0} or {0,0,0})
+  for(int64_t a=0L; a<nparticles; ++a) {
+    body& particle = bodies[a];
+    double r = norm2(particle.coordinates());
+    if (r < r_blast) {
+       particles_blast++;
+       mass_blast += mass_particle;
+    }
   }
+
   // Assign density, pressure and specific internal energy to particles,
   // including the particles in the blast zone
-  for(int64_t part=0; part<tparticles; ++part){
-    // Particle mass from number of particles and density
-    m[part] = mass;
+  const double rho0 = density_profiles::spherical_density_profile(0);
+  const double K0 = pressure_initial // polytropic constant
+                  / pow(rho_initial, poly_gamma); 
+  std::default_random_engine generator;
+  for(int64_t a=0; a<nparticles; ++a){
+    body& particle = bodies[a];
 
-    // Count particles in the blast zone and sum their masses
-    if(sqrt((x[part]-x_c)*(x[part]-x_c)+(y[part]-y_c)*(y[part]-y_c)+(z[part]-z_c)*(z[part]-z_c)) < r_blast){
-       particles_blast++;
-       mass_blast += m[part];
+    // zero velocity for this test
+    point_t zero = 0;
+    particle.setVelocity(zero);
+    particle.setAcceleration(zero);
+
+    // radial distance from the origin
+    point_t rp(particle.coordinates());
+    double r = norm2(rp);
+
+    // set density, particle mass, smoothing length and id
+    double rho_a, m_a, h_a;
+    int64_t id_a;
+    if (modify_initial_data) {
+      rho_a = particle.getDensity();
+      m_a   = particle.mass();
+      h_a   = particle.radius();
+      id_a  = particle.id();
     }
-  }
-  for(int64_t part=0; part<tparticles; ++part){
-    P[part] = pressure_initial;
-    rho[part] = rho_initial;
-    u[part] = uint_initial;
-    h[part] = sph_smoothing_length;
-    id[part] = posid++;
-
-    if(sqrt((x[part]-x_c)*(x[part]-x_c)+(y[part]-y_c)*(y[part]-y_c)+(z[part]-z_c)*(z[part]-z_c)) < r_blast){
-       u[part] = u[part]+sedov_blast_energy/particles_blast;
-       P[part] = u[part]*rho[part]*(poly_gamma - 1.0);
+    else {
+      rho_a = rho_initial/rho0  // renormalize density profile
+            * density_profiles::spherical_density_profile(r/sphere_radius);
+      m_a = mass_particle;
+      h_a = sph_eta * kernels::kernel_width
+          * pow(mass_particle/rho_a,1./gdimension);
+      id_a = a;
+      particle.setDensity(rho_a);
+      particle.set_mass(m_a);
+      particle.set_radius(h_a);
+      particle.set_id(a);
     }
+
+    if (lattice_perturbation_amplitude > 0.0) {
+    // add lattice perturbation
+      std::normal_distribution<double> 
+        distribution(0.,h_a*lattice_perturbation_amplitude);
+      for (unsigned short k=0; k<gdimension; ++k) { 
+        rp[k] += distribution(generator);
+      }
+      particle.set_coordinates(rp);
+    }
+
+    // set internal energy
+    double u_a = K0*pow(rho_a,poly_gamma-1)/(poly_gamma-1);
+    if (r < r_blast) 
+      u_a += sedov_blast_energy/particles_blast;
+    particle.setInternalenergy(u_a);
+
+    // set pressure (a function of density and internal energy)
+    double P_a = rho_a*u_a*(poly_gamma - 1);
+    particle.setPressure(P_a);
+
+    // set timestep
+    particle.setDt(initial_dt);
+
   }
 
-  clog(info) << "Real number of particles: " << tparticles << std::endl;
-  clog(info) << "Total number of seeded blast particles: " << particles_blast << std::endl;
-  clog(info) << "Total blast energy (E_blast = u_blast * total mass): "
+  clog_one(info) << "Number of particles: " << nparticles << std::endl;
+  clog_one(info) << "Mass of a single particle: " << mass_particle << std::endl;
+  clog_one(info) << "Total number of seeded blast particles: " << particles_blast << std::endl;
+  clog_one(info) << "Total blast energy (E_blast = u_blast * total mass): "
                  << sedov_blast_energy * mass_blast << std::endl;
 
   // remove the previous file
-  remove(initial_data_file.c_str());
+  remove(initial_data_file);
+  delete[] x, y, z;
 
-  Flecsi_Sim_IO::HDF5ParticleIO testDataSet;
-  testDataSet.createDataset(initial_data_file.c_str(),MPI_COMM_WORLD);
-
-  // add the global attributes
-  testDataSet.writeDatasetAttribute("nparticles","int64_t",tparticles);
-  testDataSet.writeDatasetAttribute("timestep","double",timestep);
-  testDataSet.writeDatasetAttribute("dimension","int32_t",gdimension);
-  testDataSet.writeDatasetAttribute("use_fixed_timestep","int32_t",1);
-
-  testDataSet.closeFile();
-
-  testDataSet.openFile(MPI_COMM_WORLD);
-  testDataSet.setTimeStep(0);
-
-  Flecsi_Sim_IO::Variable _d1,_d2,_d3;
-
-  _d1.createVariable("x",Flecsi_Sim_IO::point,"double",tparticles,x);
-  _d2.createVariable("y",Flecsi_Sim_IO::point,"double",tparticles,y);
-  _d3.createVariable("z",Flecsi_Sim_IO::point,"double",tparticles,z);
-
-  testDataSet.vars.push_back(_d1);
-  testDataSet.vars.push_back(_d2);
-  testDataSet.vars.push_back(_d3);
-
-  testDataSet.writeVariables();
-
-  _d1.createVariable("vx",Flecsi_Sim_IO::point,"double",tparticles,vx);
-  _d2.createVariable("vy",Flecsi_Sim_IO::point,"double",tparticles,vy);
-  _d3.createVariable("vz",Flecsi_Sim_IO::point,"double",tparticles,vz);
-
-  testDataSet.vars.push_back(_d1);
-  testDataSet.vars.push_back(_d2);
-  testDataSet.vars.push_back(_d3);
-
-  testDataSet.writeVariables();
-
-  _d1.createVariable("ax",Flecsi_Sim_IO::point,"double",tparticles,ax);
-  _d2.createVariable("ay",Flecsi_Sim_IO::point,"double",tparticles,ay);
-  _d3.createVariable("az",Flecsi_Sim_IO::point,"double",tparticles,az);
-
-  testDataSet.vars.push_back(_d1);
-  testDataSet.vars.push_back(_d2);
-  testDataSet.vars.push_back(_d3);
-
-  testDataSet.writeVariables();
-
-
-  _d1.createVariable("h",Flecsi_Sim_IO::point,"double",tparticles,h);
-  _d2.createVariable("rho",Flecsi_Sim_IO::point,"double",tparticles,rho);
-  _d3.createVariable("u",Flecsi_Sim_IO::point,"double",tparticles,u);
-
-  testDataSet.vars.push_back(_d1);
-  testDataSet.vars.push_back(_d2);
-  testDataSet.vars.push_back(_d3);
-
-  testDataSet.writeVariables();
-
-  _d1.createVariable("P",Flecsi_Sim_IO::point,"double",tparticles,P);
-  _d2.createVariable("m",Flecsi_Sim_IO::point,"double",tparticles,m);
-  _d3.createVariable("id",Flecsi_Sim_IO::point,"int64_t",tparticles,id);
-
-  testDataSet.vars.push_back(_d1);
-  testDataSet.vars.push_back(_d2);
-  testDataSet.vars.push_back(_d3);
-
-  testDataSet.writeVariables();
-
-  testDataSet.closeFile();
-
-  delete[] x;
-  delete[] y;
-  delete[] z;
-  delete[] vx;
-  delete[] vy;
-  delete[] vz;
-  delete[] ax;
-  delete[] ay;
-  delete[] az;
-  delete[] h;
-  delete[] rho;
-  delete[] u;
-  delete[] P;
-  delete[] m;
-  delete[] id;
-  delete[] dt;
-
+  // write the file; iteration for initial data MUST BE zero!!
+  bs.write_bodies(initial_data_prefix, 0, 0.0);
   MPI_Finalize();
   return 0;
 }

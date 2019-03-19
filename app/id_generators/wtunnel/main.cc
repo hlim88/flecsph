@@ -1,5 +1,5 @@
 /*~--------------------------------------------------------------------------~*
- * Copyright (c) 2017 Los Alamos National Security, LLC
+ * Copyright (c) 2017 Triad National Security, LLC
  * All rights reserved.
  *~--------------------------------------------------------------------------~*/
 
@@ -12,8 +12,9 @@
 #include "user.h"
 #include "sodtube.h"
 #include "params.h"
-#include "hdf5ParticleIO.h"
 #include "lattice.h"
+#include "io.h"
+using namespace io;
 
 /*
  * Wind tunnel test
@@ -26,7 +27,7 @@
  *  - flow_velocity:          initial velocity;
  *  - rho_initial, pressure_initial
  * Different obstacles (e.g. airfoil) can be placed in the tunnel to study their
- * aerodynamical properties.
+ * aerodynamic properties.
  *
  */
 //
@@ -34,8 +35,8 @@
 //
 void print_usage() {
   using namespace std;
-  clog_one(warn) << "Initial data generator for the wind tunnel test in" 
-                 << gdimension << "D" << endl << "Usage: ./wtunnel_" 
+  clog_one(warn) << "Initial data generator for the wind tunnel test in"
+                 << gdimension << "D" << endl << "Usage: ./wtunnel_"
                  << gdimension << "d_generator <parameter-file.par>"
                  << endl;
 }
@@ -122,16 +123,8 @@ int main(int argc, char * argv[]){
 
   // allocate arrays
   int64_t tparticles = 0;
-  int64_t parts_mid= 0;
-  int64_t parts_lr = 0;
-  double mass = 0;
-  bool equal_separation = !equal_mass;
-  tparticles =  particle_lattice::count(lattice_type,2,cbox_min,cbox_max,
+  tparticles =  particle_lattice::count(lattice_type,0,cbox_min,cbox_max,
                                         sph_separation,0);
-
-  double lr_sph_sep = 0.;
-  double temp_part = 0;
-  double temp_part_new = 0;
 
   // Initialize the arrays to be filled later
   // Position
@@ -161,7 +154,7 @@ int main(int argc, char * argv[]){
   // Timestep
   double* dt = new double[tparticles]();
 
-  tparticles =  particle_lattice::generate(lattice_type,2,cbox_min,cbox_max,
+  tparticles =  particle_lattice::generate(lattice_type,0,cbox_min,cbox_max,
                                            sph_separation,0,x,y,z);
 
   // particle id number
@@ -191,95 +184,35 @@ int main(int argc, char * argv[]){
   clog_one(info) << "Actual number of particles: " << tparticles << std::endl;
   // delete the output file if exists
   remove(initial_data_file.c_str());
+  hid_t dataFile = H5P_openFile(initial_data_file.c_str(),H5F_ACC_RDWR);
 
-  // Header data
-  // the number of particles = nparticles
-  Flecsi_Sim_IO::HDF5ParticleIO testDataSet;
-  testDataSet.createDataset(initial_data_file,MPI_COMM_WORLD);
-
+  int use_fixed_timestep = 1;
   // add the global attributes
-  testDataSet.writeDatasetAttribute("nparticles","int64_t",tparticles);
-  testDataSet.writeDatasetAttribute("timestep","double",timestep);
-  testDataSet.writeDatasetAttribute("dimension","int32_t",gdimension);
-  testDataSet.writeDatasetAttribute("use_fixed_timestep","int32_t",1);
+  H5P_writeAttribute(dataFile,"nparticles",&nparticles);
+  H5P_writeAttribute(dataFile,"timestep",&timestep);
+  int dim = gdimension;
+  H5P_writeAttribute(dataFile,"dimension",&dim);
+  H5P_writeAttribute(dataFile,"use_fixed_timestep",&use_fixed_timestep);
 
-  //testDataSet.writeDatasetAttributeArray("name","string",simName);
-  testDataSet.closeFile();
+  H5P_setNumParticles(nparticles);
+  H5P_setStep(dataFile,0);
 
-  testDataSet.openFile(MPI_COMM_WORLD);
-  testDataSet.setTimeStep(0);
+  //H5PartSetNumParticles(dataFile,nparticles);
+  H5P_writeDataset(dataFile,"x",x,nparticles);
+  H5P_writeDataset(dataFile,"y",y,nparticles);
+  H5P_writeDataset(dataFile,"z",z,nparticles);
+  H5P_writeDataset(dataFile,"vx",vx,nparticles);
+  H5P_writeDataset(dataFile,"vy",vy,nparticles);
+  H5P_writeDataset(dataFile,"h",h,nparticles);
+  H5P_writeDataset(dataFile,"rho",rho,nparticles);
+  H5P_writeDataset(dataFile,"u",u,nparticles);
+  H5P_writeDataset(dataFile,"P",P,nparticles);
+  H5P_writeDataset(dataFile,"m",m,nparticles);
+  H5P_writeDataset(dataFile,"id",id,nparticles);
 
-  Flecsi_Sim_IO::Variable _d1,_d2,_d3;
+  H5P_closeFile(dataFile);
+  delete[] x, y, z, vx, vy, vz, ax, ay, az, h, rho, u, P, m, id, dt;
 
-  _d1.createVariable("x",Flecsi_Sim_IO::point,"double",tparticles,x);
-  _d2.createVariable("y",Flecsi_Sim_IO::point,"double",tparticles,y);
-  _d3.createVariable("z",Flecsi_Sim_IO::point,"double",tparticles,z);
-
-  testDataSet.vars.push_back(_d1);
-  testDataSet.vars.push_back(_d2);
-  testDataSet.vars.push_back(_d3);
-
-  testDataSet.writeVariables();
-
-  _d1.createVariable("vx",Flecsi_Sim_IO::point,"double",tparticles,vx);
-  //_d2.createVariable("vy",Flecsi_Sim_IO::point,"double",nparticlesproc,vy);
-  //_d3.createVariable("vz",Flecsi_Sim_IO::point,"double",nparticlesproc,vz);
-
-  testDataSet.vars.push_back(_d1);
-  //testDataSet.vars.push_back(_d2);
-  //testDataSet.vars.push_back(_d3);
-
-  testDataSet.writeVariables();
-
-  //_d1.createVariable("ax",Flecsi_Sim_IO::point,"double",nparticlesproc,ax);
-  //_d2.createVariable("ay",Flecsi_Sim_IO::point,"double",nparticlesproc,ay);
-  //_d3.createVariable("az",Flecsi_Sim_IO::point,"double",nparticlesproc,az);
-
-  //testDataSet.vars.push_back(_d1);
-  //testDataSet.vars.push_back(_d2);
-  //testDataSet.vars.push_back(_d3);
-
-  //testDataSet.writeVariables();
-
-
-  _d1.createVariable("h",Flecsi_Sim_IO::point,"double",tparticles,h);
-  _d2.createVariable("rho",Flecsi_Sim_IO::point,"double",tparticles,rho);
-  _d3.createVariable("u",Flecsi_Sim_IO::point,"double",tparticles,u);
-
-  testDataSet.vars.push_back(_d1);
-  testDataSet.vars.push_back(_d2);
-  testDataSet.vars.push_back(_d3);
-
-  testDataSet.writeVariables();
-
-  _d1.createVariable("P",Flecsi_Sim_IO::point,"double",tparticles,P);
-  _d2.createVariable("m",Flecsi_Sim_IO::point,"double",tparticles,m);
-  _d3.createVariable("id",Flecsi_Sim_IO::point,"int64_t",tparticles,id);
-
-  testDataSet.vars.push_back(_d1);
-  testDataSet.vars.push_back(_d2);
-  testDataSet.vars.push_back(_d3);
-
-  testDataSet.writeVariables();
-
-  testDataSet.closeFile();
-
-  delete[] x;
-  delete[] y;
-  delete[] z;
-  delete[] vx;
-  delete[] vy;
-  delete[] vz;
-  delete[] ax;
-  delete[] ay;
-  delete[] az;
-  delete[] h;
-  delete[] rho;
-  delete[] u;
-  delete[] P;
-  delete[] m;
-  delete[] id;
-  delete[] dt;
 
   MPI_Finalize();
   return 0;

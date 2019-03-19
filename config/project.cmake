@@ -1,10 +1,10 @@
 #------------------------------------------------------------------------------#
-# The cinch version 
+# The cinch version
 #------------------------------------------------------------------------------#
-cinch_minimum_required(1.0)
+cinch_minimum_required(VERSION 1.0)
 
 #------------------------------------------------------------------------------#
-# The project name 
+# The project name
 #------------------------------------------------------------------------------#
 project(flecsph)
 
@@ -15,14 +15,14 @@ project(flecsph)
 set(CINCH_HEADER_SUFFIXES "\\.h")
 
 #------------------------------------------------------------------------------#
-# If a C++14 compiler is available, then set the appropriate flags
+# A C++17-capable compiler is required
 #------------------------------------------------------------------------------#
-include(cxx14)
-check_for_cxx14_compiler(CXX14_COMPILER)
-if(CXX14_COMPILER)
-  enable_cxx14()
+include(cxx17)
+check_for_cxx17_compiler(CXX17_COMPILER)
+if(CXX17_COMPILER)
+  enable_cxx17()
 else()
-  message(FATAL_ERROR "C++14 compatible compiler not found")
+  message(FATAL_ERROR "C++17 compatible compiler not found")
 endif()
 
 #------------------------------------------------------------------------------#
@@ -30,6 +30,10 @@ endif()
 #------------------------------------------------------------------------------#
 cinch_load_extras()
 
+#------------------------------------------------------------------------------#
+# Legion
+#------------------------------------------------------------------------------#
+cinch_load_extras(LEGION)
 
 #------------------------------------------------------------------------------#
 # Find FleCSI
@@ -43,22 +47,8 @@ message(STATUS ${FleCSPH_LIBRARIES})
 #------------------------------------------------------------------------------#
 # MPI
 #------------------------------------------------------------------------------#
-find_package(MPI REQUIRED)
-include_directories(${MPI_INCLUDE_PATH})
-list(APPEND FleCSPH_LIBRARIES ${MPI_LIBRARIES})
-
-#------------------------------------------------------------------------------#
-# Legion
-#------------------------------------------------------------------------------#
-find_package(Legion REQUIRED)
-include_directories(${Legion_INCLUDE_DIRS})
-list(APPEND FleCSPH_LIBRARIES ${Legion_LIBRARY} ${REALM_LIBRARY})
-
-#------------------------------------------------------------------------------#
-# Pthreads for parallelism in the tree
-#------------------------------------------------------------------------------#
-#find_package(Threads REQUIRED)
-#include_directories(${THREADS_INCLUDE_PATH})
+cinch_load_extras(MPI)
+list (APPEND FleCSPH_LIBRARIES ${CINCH_RUNTIME_LIBRARIES} )
 
 #------------------------------------------------------------------------------#
 # Add OpenMP
@@ -74,18 +64,6 @@ find_package(Boost REQUIRED)
 include_directories(${Boost_INCLUDE_DIR})
 
 #------------------------------------------------------------------------------#
-# H5HUT
-#------------------------------------------------------------------------------#
-# Set by hand right now
-find_package(H5hut REQUIRED)
-#set(HDF5_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/third-party-libraries/local/include")
-#set(HDF5_LIBRARIES "${CMAKE_SOURCE_DIR}/third-party-libraries/local/lib/libH5hut.so")
-message(STATUS ${H5hut_LIBRARIES})
-message(STATUS ${H5hut_INCLUDE_DIRS})
-list(APPEND FleCSPH_LIBRARIES ${H5hut_LIBRARIES})
-include_directories(${H5hut_INCLUDE_DIRS})
-
-#------------------------------------------------------------------------------#
 # HDF5
 #------------------------------------------------------------------------------#
 #for static libH4hut
@@ -99,19 +77,11 @@ list(APPEND FleCSPH_LIBRARIES ${HDF5_LIBRARIES})
 include_directories(${HDF5_INCLUDE_DIR})
 
 #------------------------------------------------------------------------------#
-# HDF5 ScalingFramework
-#------------------------------------------------------------------------------#
-set(HSF_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/third-party-libraries/ScalingFramework/IOTests")
-message(STATUS ${HSF_INCLUDE_DIR})
-include_directories(${HSF_INCLUDE_DIR})
-
-
-
-#------------------------------------------------------------------------------#
 # Add mpisph tests
 #------------------------------------------------------------------------------#
 cinch_add_application_directory("mpisph/")
 cinch_add_application_directory("include/physics/test")
+cinch_add_application_directory("include/tree_topology/test")
 
 #------------------------------------------------------------------------------#
 # Add application targets

@@ -1,18 +1,18 @@
 /*~--------------------------------------------------------------------------~*
- * Copyright (c) 2017 Los Alamos National Security, LLC
+ * Copyright (c) 2017 Triad National Security, LLC
  * All rights reserved.
- *~--------------------------------------------------------------------------~*\
+ *~--------------------------------------------------------------------------~*/
 
  /*~--------------------------------------------------------------------------~*
- * 
- * /@@@@@@@@ @@           @@@@@@   @@@@@@@@ @@@@@@@  @@      @@
- * /@@///// /@@          @@////@@ @@////// /@@////@@/@@     /@@
- * /@@      /@@  @@@@@  @@    // /@@       /@@   /@@/@@     /@@
- * /@@@@@@@ /@@ @@///@@/@@       /@@@@@@@@@/@@@@@@@ /@@@@@@@@@@
- * /@@////  /@@/@@@@@@@/@@       ////////@@/@@////  /@@//////@@
- * /@@      /@@/@@//// //@@    @@       /@@/@@      /@@     /@@
- * /@@      @@@//@@@@@@ //@@@@@@  @@@@@@@@ /@@      /@@     /@@
- * //       ///  //////   //////  ////////  //       //      //  
+ *
+ * /@@@@@@@@  @@           @@@@@@   @@@@@@@@ @@@@@@@  @@      @@
+ * /@@/////  /@@          @@////@@ @@////// /@@////@@/@@     /@@
+ * /@@       /@@  @@@@@  @@    // /@@       /@@   /@@/@@     /@@
+ * /@@@@@@@  /@@ @@///@@/@@       /@@@@@@@@@/@@@@@@@ /@@@@@@@@@@
+ * /@@////   /@@/@@@@@@@/@@       ////////@@/@@////  /@@//////@@
+ * /@@       /@@/@@//// //@@    @@       /@@/@@      /@@     /@@
+ * /@@       @@@//@@@@@@ //@@@@@@  @@@@@@@@ /@@      /@@     /@@
+ * //       ///  //////   //////  ////////  //       //      //
  *
  *~--------------------------------------------------------------------------~*/
 
@@ -20,9 +20,9 @@
  * @file main_driver.cc
  * @author Julien Loiseau
  * @date April 2017
- * @brief Specialization and Main driver used in FleCSI. 
- * The Specialization Driver is normally used to register data and the main 
- * code is in the Driver.  
+ * @brief Specialization and Main driver used in FleCSI.
+ * The Specialization Driver is normally used to register data and the main
+ * code is in the Driver.
  */
 
 #include <iostream>
@@ -30,32 +30,23 @@
 #include <iostream>
 
 #include <mpi.h>
+#ifdef ENABLE_LEGION
 #include <legion.h>
+#endif
 #include <omp.h>
 
 #include "flecsi/execution/execution.h"
 #include "flecsi/data/data_client.h"
 #include "flecsi/data/data.h"
 
-// Define the relaxation 
-// 1 = relaxation = computation of rot force 
-// 0 = non relaxation = rotation applied
-#define RELAXATION 1
-#if RELAXATION == 1
-#warning CAUTION RELAXATION MODE
-#endif
-#define ADIABATIC
-
+// #define poly_gamma 5./3.
 #include "params.h"
 #include "bodies_system.h"
 #include "default_physics.h"
-#include "BNS_physics.h"
 #include "analysis.h"
-#include "eos.h"
-//#include "star_tracker.h"
+#include "diagnostic.h"
 
-namespace flecsi{
-namespace execution{
+#define OUTPUT_ANALYSIS
 
 static std::string initial_data_file;  // = initial_data_prefix  + ".h5part"
 static std::string output_h5data_file; // = output_h5data_prefix + ".h5part"
@@ -64,12 +55,13 @@ void set_derived_params() {
   using namespace param;
 
   // set kernel
-  kernels::select(sph_kernel);
+  kernels::select();
+
+  // set viscosity
+  viscosity::select(sph_viscosity);
 
   // filenames (this will change for multiple files output)
   std::ostringstream oss;
-  oss << initial_data_prefix << ".h5part";
-  initial_data_file = oss.str();
   oss << output_h5data_prefix << ".h5part";
   output_h5data_file = oss.str();
 
@@ -80,213 +72,173 @@ void set_derived_params() {
 
   // set equation of state
   eos::select(eos_type);
+
+  // set external force
+  external_force::select(external_force_type);
 }
 
-void mpi_init_task(const char * parameter_file){
+namespace flecsi{
+namespace execution{
+
+void
+mpi_init_task(const char * parameter_file){
   using namespace param;
-  
+
   int rank;
   int size;
   MPI_Comm_size(MPI_COMM_WORLD,&size);
   MPI_Comm_rank(MPI_COMM_WORLD,&rank);
-  
+
   // set simulation parameters
   param::mpi_read_params(parameter_file);
   set_derived_params();
 
   // remove output file
-  remove(output_h5data_file.c_str());
+  //remove(output_h5data_file.c_str());
 
   // read input file
   body_system<double,gdimension> bs;
-  bs.read_bodies(initial_data_file.c_str(),initial_iteration);
-  bs.update_iteration();
+  bs.read_bodies(initial_data_prefix,
+      output_h5data_prefix,initial_iteration);
+  bs.setMacangle(param::fmm_macangle);
+  bs.setMaxmasscell(param::fmm_max_cell_mass);
 
-  // auxiliary variables to record elapsed OMP time
-  double wt = 0;
-  double wt_start = 0;
+  MPI_Barrier(MPI_COMM_WORLD);
 
-  // set additional physics quantites
-  physics::A = 0.6366197723675814;
-  physics::angular_moment = bs.get_attribute<double>(
-      initial_data_file.c_str(), "angularMomentum");
-
-  bs.setMacangle(fmm_macangle);
-  bs.setMaxmasscell(fmm_max_cell_mass);
-
-  point_t momentum = {};
-
-  if(physics::iteration == 0){
-    // Set adiabatic value 
-    bs.apply_all([](body_holder* source){
-        source->getBody()->setAdiabatic(physics::A);
-        physics::compute_internal_energy_from_adiabatic(source);
-      });
-
-  }else{
-    rank|| clog(info) << "Recomputing A from u"<<std::endl; 
-    rank|| clog(info) << "Considering velocityHalf = velocity" << std::endl;
-    // Convert internal energy to A ratio 
-    bs.apply_all(physics::compute_adiabatic_from_internal_energy);
-    bs.apply_all([](body_holder* source){
-        source->getBody()->setVelocityhalf(
-          source->getBody()->getVelocity());
-      });
-  }
-
-#ifdef OUTPUT
-  if(out_scalar_every > 0 && physics::iteration % out_scalar_every == 0){
-    MPI_Barrier(MPI_COMM_WORLD);
-    bs.update_iteration();
-    bs.apply_in_smoothinglength(physics::compute_density_pressure_soundspeed);
-    
-    // Compute conserved quantities
-    bs.get_all(analysis::compute_lin_momentum);
-    bs.get_all(analysis::compute_total_mass);
-    bs.get_all(analysis::compute_total_energy);
-    bs.get_all(analysis::compute_total_ang_mom);
-    analysis::scalar_output("scalar_reductions.dat");
-  }
-
-  bs.write_bodies(output_h5data_prefix,physics::iteration);
-#endif
-
-  ++(physics::iteration); 
-  do
-  { 
-    wt_start = omp_get_wtime();
+  do {
     analysis::screen_output(rank);
     MPI_Barrier(MPI_COMM_WORLD);
 
-    // Integration step
-    // TODO: leapfrog integration implemented incorrectly;
-    //       update similarly to what is in the drivers/hydro.
-    rank|| clog(trace)<<"Leapfrog integration"<<std::flush; 
-    wt = omp_get_wtime(); 
-    bs.apply_all(physics::leapfrog_integration);
-    rank|| clog(trace)<<".done "<< omp_get_wtime() - wt << "s" <<std::endl;
+    if (physics::iteration == param::initial_iteration){
 
-    // Get rid of distant particles for faster run 
-    bs.apply_all([](body_holder* source){
-        body * src = source->getBody();
-        point_t pos = src->getPosition();
-        for(size_t i = 0 ; i < gdimension ; ++i){
-          if(pos[i] > 10){ // TODO: 10 is hardcoded, turn to a parameter
-            pos[i] = 10;
-            src->setVelocity(point_t{});
-          }
-          if(pos[i] < -10){
-            pos[i] = -10;
-            src->setVelocity(point_t{});
-          }
-          src->setPosition(pos);
-        }
-    });
+      clog_one(trace)<<"First iteration"<<std::endl << std::flush;
+      bs.update_iteration();
 
-#if RELAXATION == 0
-    // Rotation of the stars
-    rank|| clog(trace)<<"Rotation"<<std::flush; 
-    wt = omp_get_wtime(); 
-    bs.apply_all(physics::apply_rotation);
-    rank|| clog(trace)<<".done "<< omp_get_wtime() - wt << "s" <<std::endl;
-#endif
+      if(thermokinetic_formulation) {
+        // compute total energy for every particle
+        bs.apply_all(physics::set_total_energy);
+      }
 
-    // Compute and prepare the tree for this iteration 
-    // - Compute the Max smoothing length 
-    // - Compute the range of the system using the smoothinglength
-    // - Cmopute the keys 
-    // - Distributed qsort and sharing 
-    // - Generate and feed the tree
-    // - Exchange branches for smoothing length 
-    // - Compute and exchange ghosts in real smoothing length 
-    bs.update_iteration();
+      clog_one(trace) << "compute density pressure cs" << std::flush;
+      bs.apply_in_smoothinglength(physics::compute_density_pressure_soundspeed);
+      bs.apply_all(integration::save_velocityhalf);
 
-    MPI_Barrier(MPI_COMM_WORLD);
-    rank|| clog(trace)<<"compute_density_pressure_soundspeed"<<std::flush; 
-    wt = omp_get_wtime(); 
-    bs.apply_in_smoothinglength(
-      physics::compute_density_pressure_soundspeed); 
-    rank|| clog(trace)<<".done "<< omp_get_wtime() - wt << "s" <<std::endl;
+      // necessary for computing dv/dt and du/dt in the next step
+      bs.reset_ghosts();
 
-    bs.update_neighbors();
+      clog_one(trace) << "compute rhs of evolution equations" <<std::endl<< std::flush;
+      bs.apply_in_smoothinglength(physics::compute_acceleration);
+      clog_one(trace) << "compute gravitation" <<std::endl<< std::flush;
+      bs.gravitation_fmm();
+      if (thermokinetic_formulation){
+        clog_one(trace) << "compute dedt" << std::flush;
+        bs.apply_in_smoothinglength(physics::compute_dedt);
+      }else{
+        clog_one(trace) << "compute dudt" << std::flush;
+        bs.apply_in_smoothinglength(physics::compute_dudt);
+      }
+      clog_one(trace) << ".done" << std::endl;
 
-    // reset acceleration to 0 
-    bs.apply_all([](body_holder* source){
-      source->getBody()->setAcceleration(point_t{});
-    });
+    }
+    else {
+      clog_one(trace) << "leapfrog: kick one" << std::flush;
+      bs.apply_all(integration::leapfrog_kick_v);
+      if (thermokinetic_formulation)
+        bs.apply_all(integration::leapfrog_kick_e);
+      else
+        bs.apply_all(integration::leapfrog_kick_u);
+      bs.apply_all(integration::save_velocityhalf);
+      clog_one(trace) << ".done" << std::endl;
+
+      clog_one(trace) << "leapfrog: drift" << std::flush;
+      bs.apply_all(integration::leapfrog_drift);
+      clog_one(trace) << ".done" << std::endl;
+
+      // sync velocities
+      bs.update_iteration();
+      clog_one(trace) << "compute density pressure cs"<<std::endl << std::flush;
+      bs.apply_in_smoothinglength(physics::compute_density_pressure_soundspeed);
+
+      // Sync density/pressure/cs
+      bs.reset_ghosts();
 
 
-    rank|| clog(trace)<<"Accel FMM"<<std::flush; 
-    wt = omp_get_wtime(); 
-    bs.gravitation_fmm();
-    rank|| clog(trace)<<".done "<< omp_get_wtime() - wt << "s" <<std::endl;
+      bs.apply_in_smoothinglength(physics::compute_acceleration);
+      if(param::enable_fmm){
+        clog_one(trace) << "compute gravitation"<<std::endl << std::flush;
+        bs.gravitation_fmm();
+      }
+      clog_one(trace) << "leapfrog: kick two (velocity)" << std::flush;
+      bs.apply_all(integration::leapfrog_kick_v);
+      clog_one(trace) << ".done" << std::endl;
 
-    rank|| clog(trace)<<"Accel hydro"<<std::flush; 
-    wt = omp_get_wtime(); 
-    bs.apply_in_smoothinglength(physics::compute_hydro_acceleration);
-    rank|| clog(trace)<<".done "<< omp_get_wtime() - wt << "s" <<std::endl;
+      // sync velocities
+      bs.reset_ghosts();
 
-    rank|| clog(trace)<<"dadt"<<std::flush; 
-    wt = omp_get_wtime(); 
-    bs.apply_in_smoothinglength(physics::compute_dadt);
-    rank|| clog(trace)<<".done "<< omp_get_wtime() - wt << "s" <<std::endl;
-
-#if RELAXATION == 1
-    rank|| clog(trace)<<"Accel rot"<<std::flush; 
-    wt = omp_get_wtime(); 
-    bs.get_all(physics::compute_QZZ);
-    // Reduce QZZ
-    MPI_Allreduce(MPI_IN_PLACE,&physics::QZZ,1,MPI_DOUBLE,MPI_SUM,MPI_COMM_WORLD);
-    bs.get_all(physics::compute_rotation);
-    rank|| clog(trace)<<".done "<< omp_get_wtime() - wt << "s" <<std::endl;
- #endif
-
-    // Compute the new DT 
-    physics::dt = 1.0;
-    rank|| clog(trace)<<"DT computation"<<std::flush; 
-    wt = omp_get_wtime(); 
-    bs.apply_in_smoothinglength(physics::compute_dt);
-    mpi_utils::reduce_min(physics::dt);
-
-    rank|| clog(trace)<<".done "<< omp_get_wtime() - wt << "s" <<std::endl;
-    rank|| clog(trace)<<"dt="<<physics::dt<<std::endl;
-    assert(physics::dt != 1.0);
-
-    // Compute internal energy for output 
-    bs.apply_all(physics::compute_internal_energy_from_adiabatic);
-    rank|| clog(trace) << "Total time=" << physics::totaltime << "s / "
-                    << final_time << "s" << std::endl;
-
-    if(out_scalar_every > 0 && physics::iteration % out_scalar_every == 0){
-      // Compute the analysis values based on physics
-      bs.get_all(analysis::compute_lin_momentum);
-      bs.get_all(analysis::compute_total_mass);
-      bs.get_all(analysis::compute_total_energy);
-      bs.get_all(analysis::compute_total_ang_mom);
-      // Only add the header in the first iteration
-      analysis::scalar_output("scalar_reductions.dat");
+      clog_one(trace) << "leapfrog: kick two (energy)" << std::flush;
+      if (thermokinetic_formulation) {
+        clog_one(trace) << "compute dedt" << std::flush;
+        bs.apply_in_smoothinglength(physics::compute_dedt);
+        bs.apply_all(integration::leapfrog_kick_e);
+      }
+      else {
+        clog_one(trace) << "compute dudt" << std::flush;
+        bs.apply_in_smoothinglength(physics::compute_dudt);
+        bs.apply_all(integration::leapfrog_kick_u);
+      }
+      clog_one(trace) << ".done" << std::endl;
     }
 
-#ifdef OUTPUT
+    if(sph_variable_h){
+      clog_one(trace) << "updating smoothing length"<<std::flush;
+      bs.get_all(physics::compute_smoothinglength);
+      clog_one(trace) << ".done" << std::endl << std::flush;
+    }else if(sph_update_uniform_h){
+      // The particles moved, compute new smoothing length
+      clog_one(trace) << "updating smoothing length"<<std::flush;
+      bs.get_all(physics::compute_average_smoothinglength,bs.getNBodies());
+      clog_one(trace) << ".done" << std::endl << std::flush;
+    }
+
+    if (adaptive_timestep) {
+      // Update timestep
+      clog_one(trace) << "compute adaptive timestep" << std::flush;
+      bs.apply_all(physics::compute_dt);
+      bs.get_all(physics::set_adaptive_timestep);
+      clog_one(trace) << ".done" << std::endl;
+    }
+
+    // Output scalar reductions
+    analysis::scalar_output(bs, rank);
+    diagnostic::output(bs, rank);
+
     if(out_h5data_every > 0 && physics::iteration % out_h5data_every == 0){
-      bs.write_bodies(output_h5data_prefix,physics::iteration/out_h5data_every);
+      bs.write_bodies(output_h5data_prefix,physics::iteration,
+          physics::totaltime);
     }
     MPI_Barrier(MPI_COMM_WORLD);
-#endif
-    ++(physics::iteration);
+    ++physics::iteration;
+
     physics::totaltime += physics::dt;
-    
-    MPI_Barrier(MPI_COMM_WORLD);
-    rank|| clog(trace)<<"Iteration time = "<<omp_get_wtime()-wt_start<< "s" 
-      <<std::endl;
-  } while(physics::iteration < final_iteration);
+
+  } while(physics::iteration <= final_iteration);
+} // mpi_init_task
+
+
+flecsi_register_mpi_task(mpi_init_task, flecsi::execution);
+
+void
+usage(int rank) {
+  clog_one(warn) << "Usage: ./hydro_" << gdimension << "d "
+                    << "<parameter-file.par>" << std::endl << std::flush;
 }
 
-flecsi_register_mpi_task(mpi_init_task,flecsi::execution);
-
-void usage(int rank) {
-  rank|| clog(warn)<<"Usage:"<<std::endl<<
-    "./bns_3D [Starting iteration] [Max interation] [MAC Angle]"<<std::endl;
+bool
+check_conservation(
+  const std::vector<analysis::e_conservation>& check
+)
+{
+  return analysis::check_conservation(check);
 }
 
 void
@@ -294,11 +246,11 @@ specialization_tlt_init(int argc, char * argv[]){
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD,&rank);
 
-  rank|| clog(trace) << "In user specialization_driver" << std::endl;
+  clog_one(trace) << "In user specialization_driver" << std::endl;
 
   // check options list: exactly one option is allowed
   if (argc != 2) {
-    rank|| clog(error) << "ERROR: parameter file not specified!" << std::endl;
+    clog_one(error) << "ERROR: parameter file not specified!" << std::endl;
     usage(rank);
     return;
   }
@@ -307,15 +259,14 @@ specialization_tlt_init(int argc, char * argv[]){
 
 } // specialization driver
 
-void 
+
+void
 driver(int argc,  char * argv[]){
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD,&rank);
-  rank|| clog(warn) << "In user driver" << std::endl;
+  clog_one(trace) << "In user driver" << std::endl;
 } // driver
 
 
 } // namespace execution
 } // namespace flecsi
-
-

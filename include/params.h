@@ -1,5 +1,5 @@
 /*~--------------------------------------------------------------------------~*
- * Copyright (c) 2017 Los Alamos National Security, LLC
+ * Copyright (c) 2017 Triad National Security, LLC
  * All rights reserved.
  *~--------------------------------------------------------------------------~*/
 
@@ -78,6 +78,7 @@
 
 #ifndef PARAMS_H
 #define PARAMS_H
+#include <boost/algorithm/string.hpp>
 
 //////////////////////////////////////////////////////////////////////
 #define DECLARE_PARAM(PTYPE,PNAME,PDEF) \
@@ -89,6 +90,10 @@
   char _##PNAME[STRING_MAXLEN] = (PDEF); \
   const char * PNAME = _##PNAME;
 
+#define DECLARE_KEYWORD_PARAM(PNAME,PDEF) \
+  PNAME##_keyword _##PNAME = (PDEF); \
+  const PNAME##_keyword & PNAME = _##PNAME;
+
 #define DO_QUOTE(str) #str
 #define QUOTE(str) DO_QUOTE(str)
 
@@ -96,8 +101,8 @@
   if (param_name == QUOTE(PNAME)) { \
     (_##PNAME) = lparam_value; unknown_param=false;}
 
-#define READ_NUMERIC_PARAM(PNAME) \
-  if (param_name == QUOTE(PNAME)) { \
+#define READ_NUMERIC_PARAM(PNAME)\
+  if (param_name == QUOTE(PNAME)) {\
     iss >> (_##PNAME); unknown_param=false;}
 
 #define READ_STRING_PARAM(PNAME) \
@@ -108,9 +113,24 @@
 // TODO: the macro above won't work for strings!
 
 //////////////////////////////////////////////////////////////////////
-
 namespace param {
+//
+// Enums for keyword-type parameters
+//
 
+// sph_kernel keywords
+typedef enum sph_kernel_keyword_enum {
+  cubic_spline,
+  quintic_spline,
+  wendland_c2,
+  wendland_c4,
+  wendland_c6,
+  gaussian,
+  super_gaussian,
+  sinc_ker
+} sph_kernel_keyword;
+
+//////////////////////////////////////////////////////////////////////
 //
 // Parameters controlling timestepping and iterations
 //
@@ -135,6 +155,16 @@ namespace param {
 //- inital timestep
 #ifndef initial_dt
   DECLARE_PARAM(double,initial_dt,0.001)
+#endif
+
+//- timestep Courant-Friedrichs-Lewy factor (Dt/Dx)
+# ifndef timestep_cfl_factor
+  DECLARE_PARAM(double,timestep_cfl_factor,0.25)
+# endif
+
+//- adaptive timestepping flag
+#ifndef adaptive_timestep
+  DECLARE_PARAM(bool,adaptive_timestep,false)
 #endif
 
 //
@@ -167,7 +197,7 @@ namespace param {
 
 //- which kernel to use
 #ifndef sph_kernel
-  DECLARE_STRING_PARAM(sph_kernel,"Wendland C2")
+  DECLARE_KEYWORD_PARAM(sph_kernel,wendland_c4)
 #endif
 
 //- sinc kernel power index
@@ -175,16 +205,28 @@ namespace param {
   DECLARE_PARAM(double,sph_sinc_index,4.0)
 #endif
 
-//- if true, recompute (uniform) smoothing length every timestep 
+//- if true, recompute (uniform) smoothing length every timestep
 //  h = average { sph_eta (m/rho)^1/D } (Rosswog'09, eq.51)
 # ifndef sph_update_uniform_h
   DECLARE_PARAM(bool, sph_update_uniform_h,false)
-# endif 
+# endif
+
+//- if true, the smoothing length is variable, not the same among the
+// particles.
+#ifndef sph_variable_h
+  DECLARE_PARAM(bool, sph_variable_h,false)
+#endif
 
 //
 // Geometric parameters
 //
 //- rectangular configuration parameters (e.g. sodtube in 2D/3D)
+
+// in various tests: sets the type of the domain (0:box, 1:sphere/circle)
+# ifndef domain_type
+  DECLARE_PARAM(int,domain_type,0)
+# endif
+
 #ifndef box_length
   DECLARE_PARAM(double,box_length,3.0)
 #endif
@@ -219,12 +261,29 @@ namespace param {
   DECLARE_PARAM(bool,reflect_boundaries,false)
 #endif
 
+#ifndef periodic_boundary_x
+  DECLARE_PARAM(bool,periodic_boundary_x,false)
+#endif
+
+#ifndef periodic_boundary_y
+  DECLARE_PARAM(bool,periodic_boundary_y,false)
+#endif
+
+#ifndef periodic_boundary_z
+  DECLARE_PARAM(bool,periodic_boundary_z,false)
+#endif
+
 //
 // I/O parameters
 //
 //- file prefix for input and intiial data file[s]
 #ifndef initial_data_prefix
   DECLARE_STRING_PARAM(initial_data_prefix,"initial_data")
+#endif
+
+//- ID-generator-specific parameter to overwrite initial data
+#ifndef modify_initial_data
+  DECLARE_PARAM(bool,modify_initial_data,false)
 #endif
 
 //- file prefix for HDF5 output data file[s]
@@ -240,6 +299,11 @@ namespace param {
 //- scalar reductions output frequency
 #ifndef out_scalar_every
   DECLARE_PARAM(int32_t,out_scalar_every,10)
+#endif
+
+// - diagnostic info output frequency
+#ifndef out_diagnostic_every
+  DECLARE_PARAM(int32_t,out_diagnostic_every,10);
 #endif
 
 //- HDF5 output frequency
@@ -268,6 +332,12 @@ namespace param {
   DECLARE_PARAM(double,poly_gamma,1.4)
 #endif
 
+// - which viscosity computation to use?
+// * artificial_viscosity
+#ifndef sph_viscosity
+  DECLARE_STRING_PARAM(sph_viscosity,"artificial_viscosity")
+#endif
+
 //- artificial viscosity: parameter alpha (Rosswog'09, eq.59)
 #ifndef sph_viscosity_alpha
   DECLARE_PARAM(double,sph_viscosity_alpha,1.0)
@@ -286,6 +356,11 @@ namespace param {
 //
 // Gravity-related parameters
 //
+// Do FMM computation
+# ifndef enable_fmm
+  DECLARE_PARAM(bool,enable_fmm,false)
+# endif
+
 //- mac'n'cheese acceptance criteria
 # ifndef fmm_macangle
   DECLARE_PARAM(double,fmm_macangle,0.0)
@@ -293,58 +368,67 @@ namespace param {
 
 //- maximum mass per cell
 # ifndef fmm_max_cell_mass
-  DECLARE_PARAM(double,fmm_max_cell_mass, 1.0e-4)
+  DECLARE_PARAM(double,fmm_max_cell_mass, 0.)
 # endif
 
 //
-// Drag force parameters
+// Parameters for particle relaxation, used to relax configurations
+// by applying negative drag force against the direction of velocity
+// for each particle:
+//  f_relax = - (beta + gamma*v^2) * v
 //
-// HL : These parameters are used to relax star from 
-//      initial star in both single and binary system.
-//      Drag force is applied to acceleration computation
-//      during beginning of steps.
-//      If we have some IDs that do not require relaxation,
-//      this can be neglected
+// Simple tests which are set up on regular rectangular lattices do not
+// require particle relaxation term.
 //
-//- Do drag froce boolean
-#ifndef do_drag
-  DECLARE_PARAM(bool,do_drag,false)
-#endif
 
-//- relaxation steps
-# ifndef relax_steps
-  DECLARE_PARAM(int,relax_steps,10)
+//- apply relaxation for this many steps (non-inclusive);
+//  if set to zero (default), do not apply relaxation.
+# ifndef relaxation_steps
+  DECLARE_PARAM(int,relaxation_steps,0)
 # endif
 
-//- Drag force coefficients. 
-# ifndef drag_coeff
-  DECLARE_PARAM(double,drag_coeff,1.e-6)
+//- relaxation coefficients beta and gamma (both must be positive)
+# ifndef relaxation_beta
+  DECLARE_PARAM(double,relaxation_beta,1.e-6)
+# endif
+
+# ifndef relaxation_gamma
+  DECLARE_PARAM(double,relaxation_gamma,0.0)
 # endif
 
 
 //
 // Parameters for external acceleration
 //
+# ifndef thermokinetic_formulation
+  DECLARE_PARAM(bool,thermokinetic_formulation, true)
+# endif
+
 //- which external force to apply?
 //  * "none" (default)
 #ifndef external_force_type
   DECLARE_STRING_PARAM(external_force_type,"none")
 #endif
 
+// poison zero potential level: since potential is defined
+// up to a constant, any poison value should still work
 # ifndef zero_potential_poison_value
   DECLARE_PARAM(double,zero_potential_poison_value, 0.0)
 # endif
 
+// boundary wall power index
 # ifndef extforce_wall_powerindex
   DECLARE_PARAM(double,extforce_wall_powerindex, 5.0)
 # endif
 
+// boundary wall steepness parameter
 # ifndef extforce_wall_steepness
-  DECLARE_PARAM(double,extforce_wall_steepness, 1e6)
+  DECLARE_PARAM(double,extforce_wall_steepness, 1e12)
 # endif
 
-# ifndef thermokinetic_formulation
-  DECLARE_PARAM(bool,thermokinetic_formulation, true)
+// value of the gravity constant
+# ifndef gravity_acceleration_constant
+  DECLARE_PARAM(double,gravity_acceleration_constant, 9.81)
 # endif
 
 //
@@ -360,7 +444,12 @@ namespace param {
   DECLARE_PARAM(bool,equal_mass,true)
 #endif
 
-// characteristic density for an initial conditions
+// for some spherically- or axi-symmetric configurations:
+#ifndef density_profile
+  DECLARE_STRING_PARAM(density_profile,"constant")
+#endif
+
+// characteristic density for initial conditions
 # ifndef rho_initial
   DECLARE_PARAM(double,rho_initial,1.0)
 # endif
@@ -386,20 +475,36 @@ namespace param {
   DECLARE_PARAM(double,sedov_blast_radius,1.0)
 # endif
 
-// in Sedov test: set the lattice types
+// initial data lattice type:
 # ifndef lattice_type
   DECLARE_PARAM(int,lattice_type,0)
 # endif
 
-// in Sedov test: set the lattice types
-# ifndef domain_type
-  DECLARE_PARAM(int,domain_type,0)
+// if >0: lattice is randomly perturbed with this amplitude
+// amplitude is in units of smoothing length (h)
+# ifndef lattice_perturbation_amplitude
+  DECLARE_PARAM(double,lattice_perturbation_amplitude,0.0)
 # endif
 
 // in several tests: initial velocity of the flow
 # ifndef flow_velocity
   DECLARE_PARAM(double,flow_velocity,0.0)
 # endif
+
+// in Kelvin-Helmholtz instability test: density ratio
+# ifndef KH_density_ratio
+  DECLARE_PARAM(double,KH_density_ratio,2.0)
+# endif
+
+// A value from KH in Price's paper
+# ifndef KH_A
+  DECLARE_PARAM(double, KH_A, 0.025)
+#endif
+
+// Lamdba value for KH in Price's paper
+#ifndef KH_lambda
+  DECLARE_PARAM(double, KH_lambda, 1./6.)
+#endif
 
 //
 // Airfoil parameters
@@ -449,10 +554,10 @@ std::string trim(const std::string& str) {
  */
 void set_param(const std::string& param_name,
                const std::string& param_value) {
-  
-  // RANK/SIZE for CLOG output 
+
+  // RANK/SIZE for CLOG output
   int rank = 0;
-  int size = 1; 
+  int size = 1;
   MPI_Comm_rank(MPI_COMM_WORLD,&rank);
   MPI_Comm_size(MPI_COMM_WORLD,&size);
 
@@ -500,6 +605,13 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(initial_dt)
 # endif
 
+# ifndef timestep_cfl_factor
+  READ_NUMERIC_PARAM(timestep_cfl_factor)
+# endif
+
+# ifndef adaptive_timestep
+  READ_BOOLEAN_PARAM(adaptive_timestep)
+# endif
 
   // particle number and density --------------------------------------------
 # ifndef nparticles
@@ -522,9 +634,49 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(sph_separation)
 # endif
 
-# ifndef initial_data_prefix
-  READ_STRING_PARAM(sph_kernel)
-# endif
+  if (param_name == "sph_kernel") {
+    for (int c=0; c<str_value.length(); ++c)
+      if (str_value[c] == ' ') str_value[c] = '_';
+
+#   ifndef sph_kernel
+    if (boost::iequals(str_value,"cubic_spline"))
+      _sph_kernel =               cubic_spline;
+
+    else if (boost::iequals(str_value,"quintic_spline"))
+      _sph_kernel =                    quintic_spline;
+
+    else if (boost::iequals(str_value,"wendland_c2"))
+      _sph_kernel =                    wendland_c2;
+
+    else if (boost::iequals(str_value,"wendland_c4"))
+      _sph_kernel =                    wendland_c4;
+
+    else if (boost::iequals(str_value,"wendland_c6"))
+      _sph_kernel =                    wendland_c6;
+
+    else if (boost::iequals(str_value,"gaussian"))
+      _sph_kernel =                    gaussian;
+
+    else if (boost::iequals(str_value,"super_gaussian"))
+      _sph_kernel =                    super_gaussian;
+
+    else if (boost::iequals(str_value,"sinc_ker"))
+       _sph_kernel =                   sinc_ker;
+
+    else {
+      assert(false);
+    }
+#   else
+    if (not boost::iequals(str_value,QUOTE(sph_kernel))) {
+      clog_one(error)
+          << "ERROR: sph_kernel #defined as \"" << QUOTE(sph_kernel) << "\" "
+          << "but is reset to \"" << str_value << "\" in parameter file"
+          << std::endl;
+      exit(2);
+    }
+#   endif
+    unknown_param = false;
+  }
 
 # ifndef sph_sinc_index
   READ_NUMERIC_PARAM(sph_sinc_index)
@@ -532,9 +684,17 @@ void set_param(const std::string& param_name,
 
 # ifndef sph_update_uniform_h
   READ_BOOLEAN_PARAM(sph_update_uniform_h)
-# endif 
+# endif
+
+#ifndef sph_variable_h
+  READ_BOOLEAN_PARAM(sph_variable_h)
+#endif
 
   // geometric configuration  -----------------------------------------------
+# ifndef domain_type
+  READ_NUMERIC_PARAM(domain_type)
+# endif
+
 # ifndef box_length
   READ_NUMERIC_PARAM(box_length)
 # endif
@@ -564,10 +724,26 @@ void set_param(const std::string& param_name,
   READ_BOOLEAN_PARAM(reflect_boundaries)
 # endif
 
+# ifndef periodic_boundary_x
+  READ_BOOLEAN_PARAM(periodic_boundary_x)
+# endif
+
+# ifndef periodic_boundary_y
+  READ_BOOLEAN_PARAM(periodic_boundary_y)
+# endif
+
+# ifndef periodic_boundary_z
+  READ_BOOLEAN_PARAM(periodic_boundary_z)
+# endif
+
   // i/o parameters  --------------------------------------------------------
 # ifndef initial_data_prefix
   READ_STRING_PARAM(initial_data_prefix)
 # endif
+
+#ifndef modify_initial_data
+  READ_BOOLEAN_PARAM(modify_initial_data)
+#endif
 
 # ifndef output_h5data_prefix
   READ_STRING_PARAM(output_h5data_prefix)
@@ -579,6 +755,10 @@ void set_param(const std::string& param_name,
 
 # ifndef out_scalar_every
   READ_NUMERIC_PARAM(out_scalar_every)
+# endif
+
+# ifndef out_diagnostic_every
+  READ_NUMERIC_PARAM(out_diagnostic_every)
 # endif
 
 # ifndef out_h5data_every
@@ -598,6 +778,10 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(poly_gamma)
 # endif
 
+# ifndef sph_viscosity
+  READ_STRING_PARAM(sph_viscosity)
+# endif
+
 # ifndef sph_viscosity_alpha
   READ_NUMERIC_PARAM(sph_viscosity_alpha)
 # endif
@@ -611,6 +795,11 @@ void set_param(const std::string& param_name,
 # endif
 
   // gravity-related  -------------------------------------------------------
+
+# ifndef enable_fmm
+  READ_BOOLEAN_PARAM(enable_fmm)
+# endif
+
 # ifndef fmm_macangle
   READ_NUMERIC_PARAM(fmm_macangle)
 # endif
@@ -619,20 +808,24 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(fmm_max_cell_mass)
 # endif
 
-// Drag force parameters ---------------------------------------------------
-#ifndef do_drag
-  READ_BOOLEAN_PARAM(do_drag)
-#endif
-
-# ifndef relax_steps
-  READ_NUMERIC_PARAM(relax_steps)
+  // relaxation parameters  --------------------------------------------------
+# ifndef relaxation_steps
+  READ_NUMERIC_PARAM(relaxation_steps)
 # endif
 
-# ifndef drag_coeff
-  READ_NUMERIC_PARAM(drag_coeff)
+# ifndef relaxation_beta
+  READ_NUMERIC_PARAM(relaxation_beta)
 # endif
 
-// external force  --------------------------------------------------------
+# ifndef relaxation_gamma
+  READ_NUMERIC_PARAM(relaxation_gamma)
+# endif
+
+  // external force  --------------------------------------------------------
+# ifndef thermokinetic_formulation
+  READ_BOOLEAN_PARAM(thermokinetic_formulation)
+# endif
+
 #ifndef external_force_type
   READ_STRING_PARAM(external_force_type)
 #endif
@@ -649,8 +842,8 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(extforce_wall_steepness)
 # endif
 
-# ifndef thermokinetic_formulation
-  READ_BOOLEAN_PARAM(thermokinetic_formulation)
+# ifndef gravity_acceleration_constant
+  READ_NUMERIC_PARAM(gravity_acceleration_constant)
 # endif
 
   // specific apps  ---------------------------------------------------------
@@ -661,6 +854,10 @@ void set_param(const std::string& param_name,
 #ifndef equal_mass
   READ_BOOLEAN_PARAM(equal_mass)
 #endif
+
+# ifndef density_profile
+  READ_STRING_PARAM(density_profile)
+# endif
 
 # ifndef rho_initial
   READ_NUMERIC_PARAM(rho_initial)
@@ -686,12 +883,24 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(lattice_type)
 # endif
 
-# ifndef domain_type
-  READ_NUMERIC_PARAM(domain_type)
+# ifndef lattice_perturbation_amplitude
+  READ_NUMERIC_PARAM(lattice_perturbation_amplitude)
 # endif
 
 # ifndef flow_velocity
   READ_NUMERIC_PARAM(flow_velocity)
+# endif
+
+# ifndef KH_density_ratio
+  READ_NUMERIC_PARAM(KH_density_ratio)
+# endif
+
+# ifndef KH_A
+  READ_NUMERIC_PARAM(KH_A)
+# endif
+
+# ifndef KH_lambda
+  READ_NUMERIC_PARAM(KH_lambda)
 # endif
 
   // airfoil parameters  ----------------------------------------------------
@@ -721,11 +930,11 @@ void set_param(const std::string& param_name,
 
   // unknown parameter -------------------------------
   if (unknown_param) {
-    clog(error) << "ERROR: unknown parameter " << param_name << endl;
+    clog_one(error) << "ERROR: unknown parameter " << param_name << endl;
     exit(2);
   }
 
-  rank || clog(trace) << param_name << ": " << param_value << endl;
+  clog_one(trace) << param_name << ": " << param_value << endl;
 }
 
 /**
@@ -825,7 +1034,7 @@ void mpi_read_params(const char * parameter_file) {
   MPI_Bcast(&len, 1, MPI_INT, 0, MPI_COMM_WORLD);
   MPI_Bcast(parfile, len+1, MPI_CHAR, 0, MPI_COMM_WORLD);
 
-  rank || clog(trace) << "Parameter file name on rank " << rank << " over "<<
+  clog_one(trace) << "Parameter file name on rank " << rank << " over "<<
               size << ": " << parfile << std::endl << std::flush;
 
   // queue ranks to read the parfile sequentially;
