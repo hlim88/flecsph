@@ -273,6 +273,16 @@ typedef enum sph_kernel_keyword_enum {
   DECLARE_PARAM(bool,periodic_boundary_z,false)
 #endif
 
+//- tolerance to lattice mismatch for periodic boundaries:
+//  when generating initial data with two lattice blocks
+//  with different densities that need to be periodic, 
+//  allow this mismatch between lattice synchronization
+//  at the boundary
+//
+#ifndef lattice_matchup_tolerance
+  DECLARE_PARAM(double,lattice_mismatch_tolerance,0.05)
+#endif
+
 //
 // I/O parameters
 //
@@ -396,6 +406,14 @@ typedef enum sph_kernel_keyword_enum {
   DECLARE_PARAM(double,relaxation_gamma,0.0)
 # endif
 
+# ifndef relaxation_repulsion_radius
+  DECLARE_PARAM(double,relaxation_repulsion_radius,0.25)
+# endif
+
+# ifndef relaxation_repulsion_gamma
+  DECLARE_PARAM(double,relaxation_repulsion_gamma,0.0)
+# endif
+
 
 //
 // Parameters for external acceleration
@@ -426,9 +444,19 @@ typedef enum sph_kernel_keyword_enum {
   DECLARE_PARAM(double,extforce_wall_steepness, 1e12)
 # endif
 
+// in mesa potential, fraction of the density-drop outer section to the radius
+# ifndef mesa_rim_width
+  DECLARE_PARAM(double,mesa_rim_width, 0.25)
+# endif
+
 // value of the gravity constant
 # ifndef gravity_acceleration_constant
   DECLARE_PARAM(double,gravity_acceleration_constant, 9.81)
+# endif
+
+// value of the Gravitational constant in CGS units
+# ifndef gravitational_constant
+  DECLARE_PARAM(double,gravitational_constant, 1)
 # endif
 
 //
@@ -444,9 +472,21 @@ typedef enum sph_kernel_keyword_enum {
   DECLARE_PARAM(bool,equal_mass,true)
 #endif
 
-// for some spherically- or axi-symmetric configurations:
+// initial density profile: for initial data or density-supporting
+// external portential
+// Possible values:
+// * 'constant'  :constant uniform-density spherical configuration
+// * 'parabolic' :spherically-symmetric parabolic shape, rho ~ rho0*(1 - r^2)
+// * 'mesa'      :constant density with a smooth parabolic fade-out on edge
+// * 'from file' :setup density from the input_density_file 
 #ifndef density_profile
   DECLARE_STRING_PARAM(density_profile,"constant")
+#endif
+
+// gridded input data for generating / supporting arbitrary density profiles
+// used when parameter 'density_profile' is set to 'from file'
+#ifndef input_density_file
+  DECLARE_STRING_PARAM(input_density_file,"")
 #endif
 
 // characteristic density for initial conditions
@@ -472,7 +512,12 @@ typedef enum sph_kernel_keyword_enum {
 // in Sedov test: radius of energy injection
 // (in units of particle separation)
 # ifndef sedov_blast_radius
-  DECLARE_PARAM(double,sedov_blast_radius,1.0)
+  DECLARE_PARAM(double,sedov_blast_radius,0.05)
+# endif
+
+// in Noh test: infall velocity
+# ifndef noh_infall_velocity
+  DECLARE_PARAM(double,noh_infall_velocity,0.1)
 # endif
 
 // initial data lattice type:
@@ -491,9 +536,9 @@ typedef enum sph_kernel_keyword_enum {
   DECLARE_PARAM(double,flow_velocity,0.0)
 # endif
 
-// in Kelvin-Helmholtz instability test: density ratio
-# ifndef KH_density_ratio
-  DECLARE_PARAM(double,KH_density_ratio,2.0)
+// in several tests (e.g. KH and RT instabilities): density ratio
+# ifndef density_ratio
+  DECLARE_PARAM(double,density_ratio,2.0)
 # endif
 
 // A value from KH in Price's paper
@@ -504,6 +549,21 @@ typedef enum sph_kernel_keyword_enum {
 // Lamdba value for KH in Price's paper
 #ifndef KH_lambda
   DECLARE_PARAM(double, KH_lambda, 1./6.)
+#endif
+
+// Rayleigh-Taylor instability: perturbation amplitude
+#ifndef rt_perturbation_amplitude
+  DECLARE_PARAM(double, rt_perturbation_amplitude, 0.2)
+#endif
+
+// RT instability: the width of stripe where to apply perturbation
+#ifndef rt_perturbation_stripe_width
+  DECLARE_PARAM(double, rt_perturbation_stripe_width, 0.1)
+#endif
+
+// RT instability: perturbation mode (1=one cusp, 2=two cusps etc.)
+#ifndef rt_perturbation_mode
+  DECLARE_PARAM(double, rt_perturbation_mode,1)
 #endif
 
 //
@@ -736,6 +796,10 @@ void set_param(const std::string& param_name,
   READ_BOOLEAN_PARAM(periodic_boundary_z)
 # endif
 
+# ifndef lattice_matchup_tolerance
+  READ_NUMERIC_PARAM(lattice_mismatch_tolerance)
+# endif
+
   // i/o parameters  --------------------------------------------------------
 # ifndef initial_data_prefix
   READ_STRING_PARAM(initial_data_prefix)
@@ -821,6 +885,14 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(relaxation_gamma)
 # endif
 
+# ifndef relaxation_repulsion_radius
+  READ_NUMERIC_PARAM(relaxation_repulsion_radius)
+# endif
+
+# ifndef relaxation_repulsion_gamma
+  READ_NUMERIC_PARAM(relaxation_repulsion_gamma)
+# endif
+
   // external force  --------------------------------------------------------
 # ifndef thermokinetic_formulation
   READ_BOOLEAN_PARAM(thermokinetic_formulation)
@@ -842,8 +914,16 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(extforce_wall_steepness)
 # endif
 
+# ifndef mesa_rim_width
+  READ_NUMERIC_PARAM(mesa_rim_width)
+# endif
+
 # ifndef gravity_acceleration_constant
   READ_NUMERIC_PARAM(gravity_acceleration_constant)
+# endif
+
+# ifndef gravitational_constant
+  READ_NUMERIC_PARAM(gravitational_constant)
 # endif
 
   // specific apps  ---------------------------------------------------------
@@ -857,6 +937,10 @@ void set_param(const std::string& param_name,
 
 # ifndef density_profile
   READ_STRING_PARAM(density_profile)
+# endif
+
+# ifndef input_density_file
+  READ_STRING_PARAM(input_density_file)
 # endif
 
 # ifndef rho_initial
@@ -879,6 +963,10 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(sedov_blast_radius)
 # endif
 
+# ifndef noh_infall_velocity
+  READ_NUMERIC_PARAM(noh_infall_velocity)
+# endif
+
 # ifndef lattice_type
   READ_NUMERIC_PARAM(lattice_type)
 # endif
@@ -891,8 +979,8 @@ void set_param(const std::string& param_name,
   READ_NUMERIC_PARAM(flow_velocity)
 # endif
 
-# ifndef KH_density_ratio
-  READ_NUMERIC_PARAM(KH_density_ratio)
+# ifndef density_ratio
+  READ_NUMERIC_PARAM(density_ratio)
 # endif
 
 # ifndef KH_A
@@ -901,6 +989,18 @@ void set_param(const std::string& param_name,
 
 # ifndef KH_lambda
   READ_NUMERIC_PARAM(KH_lambda)
+# endif
+
+# ifndef rt_perturbation_amplitude
+  READ_NUMERIC_PARAM(rt_perturbation_amplitude)
+# endif
+
+# ifndef rt_perturbation_stripe_width
+  READ_NUMERIC_PARAM(rt_perturbation_stripe_width)
+# endif
+
+# ifndef rt_perturbation_mode
+  READ_NUMERIC_PARAM(rt_perturbation_mode)
 # endif
 
   // airfoil parameters  ----------------------------------------------------

@@ -2,6 +2,7 @@
 # Copyright (c) 2017 Triad National Security, LLC
 # All rights reserved.
 #----------------------------------------------------------------------------#
+option(ENABLE_MPI_TESTS "Enable unit testing with MPI" ON)
 
 #------------------------------------------------------------------------------#
 # Debug and release flags
@@ -86,11 +87,58 @@ target_link_libraries(newtonian_3d ${FleCSPH_LIBRARIES})
 target_compile_definitions(newtonian_3d PUBLIC -DEXT_GDIMENSION=3)
 install(TARGETS newtonian_3d RUNTIME DESTINATION bin/drivers)
 
+#------------------------------------------------------------------------------#
+# collapse test, call the default parameter file
+#------------------------------------------------------------------------------#
+
+if(ENABLE_UNIT_TESTS)
+cinch_add_unit(collapse_test
+  SOURCES
+    test/collapse.cc
+    newtonian/main_driver.cc
+    ${FleCSI_RUNTIME}/runtime_driver.cc
+  INPUTS
+    ${PROJECT_SOURCE_DIR}/data/collapse_nx10.par
+  LIBRARIES
+    ${FleCSPH_LIBRARIES}
+  DEFINES
+    -DEXT_GDIMENSION=3
+  POLICY MPI
+)
+
+add_custom_target(
+    collapse_3d_generator_test
+    COMMAND ${MPIEXEC} -n 1 ../id_generators/collapse_3d_generator ${PROJECT_SOURCE_DIR}/data/collapse_nx10.par
+    COMMAND mv collapse_nx10.h5part ../../test/drivers
+    DEPENDS ../id_generators/collapse_3d_generator
+)
+add_dependencies(collapse_test collapse_3d_generator_test)
+
+if(ENABLE_MPI_TESTS)
+cinch_add_unit(collapse_MPI_test
+  SOURCES
+    test/collapse.cc
+    newtonian/main_driver.cc
+    ${FleCSI_RUNTIME}/runtime_driver.cc
+  INPUTS
+    ${PROJECT_SOURCE_DIR}/data/collapse_nx10.par
+  LIBRARIES
+    ${FleCSPH_LIBRARIES}
+  DEFINES
+    -DEXT_GDIMENSION=3
+  POLICY MPI
+   THREADS 4
+)
+
+add_dependencies(collapse_MPI_test collapse_3d_generator_test)
+endif()  # ENABLE_MPI_TESTS
+endif()  # ENABLE_UNIT_TESTS
+
 
 #------------------------------------------------------------------------------#
 # sodtube test, call the default parameter file
 #------------------------------------------------------------------------------#
-
+if(ENABLE_UNIT_TESTS)
 
 cinch_add_unit(sodtube_test
   SOURCES
@@ -104,23 +152,40 @@ cinch_add_unit(sodtube_test
   DEFINES
     -DEXT_GDIMENSION=1
   POLICY MPI
-  # THREADS 2
 )
-
-if(ENABLE_UNIT_TESTS)
 
 add_custom_target(
     sodtube_1d_generator_test
-    COMMAND mpirun -n 1 ../id_generators/sodtube_1d_generator ${PROJECT_SOURCE_DIR}/data/sodtube_t1_n100.par
+    COMMAND ${MPIEXEC} -n 1 ../id_generators/sodtube_1d_generator ${PROJECT_SOURCE_DIR}/data/sodtube_t1_n100.par
     COMMAND mv sodtube_t1_n100.h5part ../../test/drivers
     DEPENDS ../id_generators/sodtube_1d_generator
 )
 add_dependencies(sodtube_test sodtube_1d_generator_test)
-endif()
 
+if(ENABLE_MPI_TESTS)
+cinch_add_unit(sodtube_MPI_test
+  SOURCES
+    test/sodtube.cc
+    hydro/main_driver.cc
+    ${FleCSI_RUNTIME}/runtime_driver.cc
+  INPUTS
+    ${PROJECT_SOURCE_DIR}/data/sodtube_t1_n100.par
+  LIBRARIES
+    ${FleCSPH_LIBRARIES}
+  DEFINES
+    -DEXT_GDIMENSION=1
+  POLICY MPI
+   THREADS 4
+)
+
+add_dependencies(sodtube_MPI_test sodtube_1d_generator_test)
+endif()  # ENABLE_MPI_TESTS
+endif()  # ENABLE_UNIT_TESTS
 #------------------------------------------------------------------------------#
 # RT test, call the default parameter file
 #------------------------------------------------------------------------------#
+
+if(ENABLE_UNIT_TESTS)
 
 cinch_add_unit(RT_test
   SOURCES
@@ -137,11 +202,9 @@ cinch_add_unit(RT_test
   #THREADS 2
 )
 
-if(ENABLE_UNIT_TESTS)
-
 add_custom_target(
     RT_2d_generator_test
-    COMMAND mpirun -n 1 ../id_generators/RT_2d_generator ${PROJECT_SOURCE_DIR}/data/RT_2d.par
+    COMMAND ${MPIEXEC} -n 1 ../id_generators/RT_2d_generator ${PROJECT_SOURCE_DIR}/data/RT_2d.par
     COMMAND mv RT_n30.h5part ../../test/drivers
     DEPENDS ../id_generators/RT_2d_generator
 )
@@ -152,6 +215,7 @@ endif()
 # sedov test with the default parameter file
 #------------------------------------------------------------------------------#
 
+if(ENABLE_UNIT_TESTS)
 cinch_add_unit(sedov_test
   SOURCES
     test/sedov.cc
@@ -167,10 +231,9 @@ cinch_add_unit(sedov_test
   #THREADS 2
 )
 
-if(ENABLE_UNIT_TESTS)
 add_custom_target(
     sedov_2d_generator_test
-    COMMAND mpirun -n 1 ../id_generators/sedov_2d_generator ${PROJECT_SOURCE_DIR}/data/sedov_nx20.par
+    COMMAND ${MPIEXEC} -n 1 ../id_generators/sedov_2d_generator ${PROJECT_SOURCE_DIR}/data/sedov_nx20.par
     COMMAND mv sedov_nx20.h5part ../../test/drivers
     DEPENDS ../id_generators/sedov_2d_generator
 )
@@ -181,6 +244,7 @@ endif()
 # noh test, with the default parameter file
 #------------------------------------------------------------------------------#
 
+if(ENABLE_UNIT_TESTS)
 cinch_add_unit(noh_test
   SOURCES
     test/noh.cc
@@ -196,10 +260,9 @@ cinch_add_unit(noh_test
   #THREADS 2
 )
 
-if(ENABLE_UNIT_TESTS)
 add_custom_target(
     noh_2d_generator_test
-    COMMAND mpirun -n 1 ../id_generators/noh_2d_generator ${PROJECT_SOURCE_DIR}/data/noh_nx20.par
+    COMMAND ${MPIEXEC} -n 1 ../id_generators/noh_2d_generator ${PROJECT_SOURCE_DIR}/data/noh_nx20.par
     COMMAND mv noh_nx20.h5part ../../test/drivers
     DEPENDS ../id_generators/noh_2d_generator
 )
@@ -210,6 +273,7 @@ endif()
 # implosion test
 #------------------------------------------------------------------------------#
 
+if(ENABLE_UNIT_TESTS)
 cinch_add_unit(implosion_test
   SOURCES
     test/implosion.cc
@@ -225,10 +289,9 @@ cinch_add_unit(implosion_test
   #THREADS 2
 )
 
-if(ENABLE_UNIT_TESTS)
 add_custom_target(
     implosion_2d_generator_test
-    COMMAND mpirun -n 1 ../id_generators/implosion_2d_generator ${PROJECT_SOURCE_DIR}/data/implosion_nx20.par
+    COMMAND ${MPIEXEC} -n 1 ../id_generators/implosion_2d_generator ${PROJECT_SOURCE_DIR}/data/implosion_nx20.par
     COMMAND mv implosion_nx20.h5part ../../test/drivers
     DEPENDS ../id_generators/implosion_2d_generator
 )
