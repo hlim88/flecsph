@@ -49,7 +49,7 @@ template <typename T, size_t D> struct tree_geometry {};
  *-----------------------------------------------------------------------------*/
 template <typename T> struct tree_geometry<T, 1> {
 
-  using point_t = point__<T, 1>;
+  using point_t = point_u<T, 1>;
   using element_t = T;
   //! Tolerance for the computations
   static constexpr element_t tol =
@@ -65,9 +65,7 @@ template <typename T> struct tree_geometry<T, 1> {
   //! Return true if dist^2 < radius^2
   static bool within_square(const point_t &origin, const point_t &center,
                             element_t r1, element_t r2) {
-    element_t x2 = (origin[0] - center[0]) * (origin[0] - center[0]);
-    element_t dist_2 = x2;
-    return dist_2 <= (r1 + r2) * (r1 + r2) * 0.25;
+    return distance(origin,center) <= std::max(r1,r2);
   }
 
   //! Return true if point origin lies within the box specified by
@@ -117,7 +115,7 @@ template <typename T> struct tree_geometry<T, 1> {
  * class tree_geometry 2D specification
  *-----------------------------------------------------------------------------*/
 template <typename T> struct tree_geometry<T, 2> {
-  using point_t = point__<T, 2>;
+  using point_t = point_u<T, 2>;
   using element_t = T;
 
   //! Tolerance for the computations
@@ -134,10 +132,7 @@ template <typename T> struct tree_geometry<T, 2> {
   //! Return true if dist^2 < radius^2
   static bool within_square(const point_t &origin, const point_t &center,
                             element_t r1, element_t r2) {
-    element_t x2 = (origin[0] - center[0]) * (origin[0] - center[0]);
-    element_t y2 = (origin[1] - center[1]) * (origin[1] - center[1]);
-    element_t dist_2 = x2 + y2;
-    return dist_2 - (r1 + r2) * (r1 + r2) * 0.25 <= tol;
+    return distance(origin,center) <= std::max(r1,r2);
   }
 
   //! Return true if point origin lies within the box specified by
@@ -158,7 +153,7 @@ template <typename T> struct tree_geometry<T, 2> {
   //! Intersection of two spheres based on center and radius
   static bool intersects_sphere_sphere(const point_t &c1, const element_t r1,
                                        const point_t &c2, const element_t r2) {
-    return distance(c1, c2) - r1 + r2 <= tol;
+    return distance(c1, c2) - (r1 + r2) <= tol;
   }
 
   //! Intersection of sphere and box; Compute the closest point from the
@@ -190,7 +185,7 @@ template <typename T> struct tree_geometry<T, 2> {
  * class tree_geometry 3D specification
  *-----------------------------------------------------------------------------*/
 template <typename T> struct tree_geometry<T, 3> {
-  using point_t = point__<T, 3>;
+  using point_t = point_u<T, 3>;
   using element_t = T;
   //! Tolerance for the computations
   static constexpr element_t tol =
@@ -204,14 +199,9 @@ template <typename T> struct tree_geometry<T, 3> {
   }
 
   //! Return true if dist^2 < radius^2
-  inline static bool within_square(const point_t &origin, const point_t &center,
+  static bool within_square(const point_t &origin, const point_t &center,
                                    const element_t &r1, const element_t &r2) {
-    element_t x2 = (origin[0] - center[0]) * (origin[0] - center[0]);
-    element_t y2 = (origin[1] - center[1]) * (origin[1] - center[1]);
-    element_t z2 = (origin[2] - center[2]) * (origin[2] - center[2]);
-    element_t dist_2 = x2 + y2 + z2;
-    element_t rp2 = (r1 + r2) * (r1 + r2) * 0.25;
-    return dist_2 <= rp2;
+    return distance(origin,center) <= std::max(r1,r2);
   }
 
   //! Return true if point origin lies within the box specified by
